@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pawit-vetcare/internal/config"
+	"pawit-vetcare/internal/database"
 	"pawit-vetcare/internal/domain"
 	"pawit-vetcare/internal/httpapi"
 )
@@ -22,7 +23,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	store := domain.NewDemoStore()
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer startupCancel()
+
+	var store domain.Store = domain.NewDemoStore()
+	var closeStore func()
+	if cfg.DatabaseURL != "" {
+		pool, err := database.NewPool(startupCtx, cfg.DatabaseURL)
+		if err != nil {
+			slog.Error("database connection failed", "error", err)
+			os.Exit(1)
+		}
+		store = database.NewPostgresStore(pool)
+		closeStore = pool.Close
+		slog.Info("PawIt database store enabled")
+	}
+	if closeStore != nil {
+		defer closeStore()
+	}
+
 	handler := httpapi.NewServer(cfg, store)
 
 	server := &http.Server{
@@ -49,10 +68,10 @@ func main() {
 	<-done
 	slog.Info("shutdown requested")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
 		os.Exit(1)
 	}

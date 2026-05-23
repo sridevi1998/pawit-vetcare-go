@@ -35,5 +35,6 @@ All application endpoints require:
 
 - Add OpenAPI 3.1 spec in `pawit-vetcare-contracts`
 - Generate frontend TypeScript clients from OpenAPI
-- Replace demo store with tenant-scoped PostgreSQL repositories
+- Expand PostgreSQL repositories with create/update workflows
 - Add mutation endpoints with idempotency keys for appointments, queue, invoices, lab reports, staff, and prescriptions
+- Add shared contract tests for API responses used by the hospital portal

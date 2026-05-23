@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -56,6 +58,15 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	if err := s.store.Ready(ctx); err != nil {
+		slog.Warn("readiness check failed", "error", err)
+		writeError(w, http.StatusServiceUnavailable, "service_unavailable", "PawIt API dependencies are not ready.")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "checkedAt": time.Now().UTC().Format(time.RFC3339)})
 }
 
@@ -75,67 +86,97 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) navigation(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"sections": s.store.Navigation()})
+	auth := authFromContext(r.Context())
+	sections, err := s.store.Navigation(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"sections": sections}, err)
 }
 
 func (s *Server) productSpec(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.ProductSpec())
+	spec, err := s.store.ProductSpec(r.Context())
+	writeData(w, spec, err)
 }
 
 func (s *Server) rolePolicies(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.RolePolicies()})
+	items, err := s.store.RolePolicies(r.Context())
+	writeData(w, map[string]any{"items": items}, err)
 }
 
 func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"metrics": s.store.Summary()})
+	auth := authFromContext(r.Context())
+	metrics, err := s.store.Summary(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"metrics": metrics}, err)
 }
 
 func (s *Server) appointments(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.Appointments()})
+	auth := authFromContext(r.Context())
+	items, err := s.store.Appointments(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"items": items}, err)
 }
 
 func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.Calendar())
+	auth := authFromContext(r.Context())
+	payload, err := s.store.Calendar(r.Context(), auth.TenantID)
+	writeData(w, payload, err)
 }
 
 func (s *Server) queue(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.Queue()})
+	auth := authFromContext(r.Context())
+	items, err := s.store.Queue(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"items": items}, err)
 }
 
 func (s *Server) patients(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.Patients()})
+	auth := authFromContext(r.Context())
+	items, err := s.store.Patients(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"items": items}, err)
 }
 
 func (s *Server) prescriptionTemplates(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.PrescriptionTemplates()})
+	auth := authFromContext(r.Context())
+	items, err := s.store.PrescriptionTemplates(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"items": items}, err)
 }
 
 func (s *Server) clinicalNotes(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.ClinicalNotes()})
+	auth := authFromContext(r.Context())
+	items, err := s.store.ClinicalNotes(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"items": items}, err)
 }
 
 func (s *Server) labTests(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.LabTests()})
+	auth := authFromContext(r.Context())
+	items, err := s.store.LabTests(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"items": items}, err)
 }
 
 func (s *Server) billing(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.Billing())
+	auth := authFromContext(r.Context())
+	payload, err := s.store.Billing(r.Context(), auth.TenantID)
+	writeData(w, payload, err)
 }
 
 func (s *Server) analytics(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.Analytics())
+	auth := authFromContext(r.Context())
+	payload, err := s.store.Analytics(r.Context(), auth.TenantID)
+	writeData(w, payload, err)
 }
 
 func (s *Server) feedback(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.Feedback())
+	auth := authFromContext(r.Context())
+	payload, err := s.store.Feedback(r.Context(), auth.TenantID)
+	writeData(w, payload, err)
 }
 
 func (s *Server) doctors(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.Doctors()})
+	auth := authFromContext(r.Context())
+	items, err := s.store.Doctors(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"items": items}, err)
 }
 
 func (s *Server) staff(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.Staff()})
+	auth := authFromContext(r.Context())
+	items, err := s.store.Staff(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"items": items}, err)
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +187,15 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeData(w http.ResponseWriter, payload any, err error) {
+	if err != nil {
+		slog.Error("request failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "PawIt could not complete the request.")
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func writeError(w http.ResponseWriter, status int, code string, message string) {

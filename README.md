@@ -7,6 +7,7 @@ Serverless-ready Go backend for PawIt VetCare, a multi-tenant veterinary hospita
 - Go API entrypoint for Cloud Run
 - Secure-by-default middleware: auth boundary, tenant scope, CORS allow-listing, security headers, request size limits, rate limiting
 - Veterinary HMS response contracts for appointments, calendar, queue, pet records, prescriptions, clinical notes, labs, billing, analytics, feedback, doctors, and staff
+- PostgreSQL-backed tenant-scoped read store when `PAWIT_DATABASE_URL` is configured, with demo data fallback for local UI work
 - Dockerfile using a non-root distroless runtime
 - GitHub Actions CI with formatting, tests, vulnerability scan, container build, and Trivy scan
 - Cloud Run service manifest
@@ -60,3 +61,5 @@ PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=
 ```
 
 The production container includes `/app/pawit-migrate` for Cloud Run migration jobs.
+
+When `PAWIT_DATABASE_URL` is set, the API uses PostgreSQL for tenant-scoped reads. Without it, local development uses the in-memory demo store so frontend screens can be built before a database is running.

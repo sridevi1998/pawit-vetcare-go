@@ -22,6 +22,7 @@ Migration files live in:
 - `internal/database/migrations/0001_pawit_core_schema.down.sql`
 
 The Go package `internal/database` embeds migrations so the future deploy/migration job can load them in order.
+The API uses the same schema for tenant-scoped read endpoints whenever `PAWIT_DATABASE_URL` is configured.
 
 Run migrations with:
 
@@ -67,4 +68,4 @@ The Cloud Run migration job manifest is in `deployments/cloud-run/migration-job.
 
 ## Next Persistence Step
 
-Add PostgreSQL repository implementations using `pgx` and tenant-scoped query helpers.
+Add write repositories and idempotent mutation endpoints for appointment requests, queue actions, invoices, lab results, documents, and staff management.
