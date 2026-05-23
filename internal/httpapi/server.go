@@ -44,6 +44,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/appointments/{id}/cancel", s.cancelAppointment)
 	s.mux.HandleFunc("GET /api/v1/calendar", s.calendar)
 	s.mux.HandleFunc("GET /api/v1/queue", s.queue)
+	s.mux.HandleFunc("POST /api/v1/queue/walk-ins", s.registerWalkIn)
+	s.mux.HandleFunc("POST /api/v1/queue/{id}/call", s.callQueueEntry)
+	s.mux.HandleFunc("POST /api/v1/queue/{id}/start", s.startQueueEntry)
+	s.mux.HandleFunc("POST /api/v1/queue/{id}/complete", s.completeQueueEntry)
+	s.mux.HandleFunc("POST /api/v1/queue/{id}/cancel", s.cancelQueueEntry)
 	s.mux.HandleFunc("GET /api/v1/pets", s.patients)
 	s.mux.HandleFunc("GET /api/v1/patients", s.patients)
 	s.mux.HandleFunc("GET /api/v1/prescription-templates", s.prescriptionTemplates)
@@ -177,6 +182,66 @@ func (s *Server) queue(w http.ResponseWriter, r *http.Request) {
 	writeData(w, map[string]any{"items": items}, err)
 }
 
+func (s *Server) registerWalkIn(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionQueueManage) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot manage the queue.")
+		return
+	}
+
+	var input domain.RegisterWalkInInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateRegisterWalkIn(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.RegisterWalkIn(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
+	writeMutation(w, http.StatusCreated, result, err)
+}
+
+func (s *Server) callQueueEntry(w http.ResponseWriter, r *http.Request) {
+	s.updateQueueStatus(w, r, domain.QueueCalled)
+}
+
+func (s *Server) startQueueEntry(w http.ResponseWriter, r *http.Request) {
+	s.updateQueueStatus(w, r, domain.QueueInProgress)
+}
+
+func (s *Server) completeQueueEntry(w http.ResponseWriter, r *http.Request) {
+	s.updateQueueStatus(w, r, domain.QueueCompleted)
+}
+
+func (s *Server) cancelQueueEntry(w http.ResponseWriter, r *http.Request) {
+	s.updateQueueStatus(w, r, domain.QueueCancelled)
+}
+
+func (s *Server) updateQueueStatus(w http.ResponseWriter, r *http.Request, status domain.QueueStatus) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionQueueManage) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot manage the queue.")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Queue entry ID is required.")
+		return
+	}
+
+	var input domain.UpdateQueueInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.UpdateQueueStatus(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), id, status, input, idempotencyKey(r))
+	writeMutation(w, http.StatusOK, result, err)
+}
+
 func (s *Server) patients(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
 	items, err := s.store.Patients(r.Context(), auth.TenantID)
@@ -301,6 +366,19 @@ func validateCreateAppointment(input domain.CreateAppointmentInput) error {
 		if _, err := time.Parse(time.RFC3339, *input.EndsAt); err != nil {
 			return errors.New("endsAt must be RFC3339")
 		}
+	}
+	return nil
+}
+
+func validateRegisterWalkIn(input domain.RegisterWalkInInput) error {
+	if strings.TrimSpace(input.LocationID) == "" {
+		return errors.New("locationId is required")
+	}
+	if strings.TrimSpace(input.PetID) == "" {
+		return errors.New("petId is required")
+	}
+	if strings.TrimSpace(input.Reason) == "" {
+		return errors.New("reason is required")
 	}
 	return nil
 }

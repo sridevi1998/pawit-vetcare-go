@@ -51,6 +51,16 @@ const (
 	LabCancelled       LabOrderStatus = "cancelled"
 )
 
+type QueueStatus string
+
+const (
+	QueueWaiting    QueueStatus = "waiting"
+	QueueCalled     QueueStatus = "called"
+	QueueInProgress QueueStatus = "in_progress"
+	QueueCompleted  QueueStatus = "completed"
+	QueueCancelled  QueueStatus = "cancelled"
+)
+
 type Species string
 
 const (

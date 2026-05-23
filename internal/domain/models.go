@@ -56,13 +56,29 @@ type AppointmentMutationResult struct {
 }
 
 type QueueEntry struct {
-	ID        string `json:"id"`
-	PetName   string `json:"petName"`
-	OwnerName string `json:"ownerName"`
-	Species   string `json:"species"`
-	Priority  string `json:"priority"`
-	Status    string `json:"status"`
-	WaitMins  int    `json:"waitMins"`
+	ID        string      `json:"id"`
+	PetName   string      `json:"petName"`
+	OwnerName string      `json:"ownerName"`
+	Species   string      `json:"species"`
+	Priority  string      `json:"priority"`
+	Status    QueueStatus `json:"status"`
+	WaitMins  int         `json:"waitMins"`
+}
+
+type RegisterWalkInInput struct {
+	LocationID string `json:"locationId"`
+	PetID      string `json:"petId"`
+	Priority   string `json:"priority,omitempty"`
+	Reason     string `json:"reason"`
+}
+
+type UpdateQueueInput struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type QueueMutationResult struct {
+	QueueEntry QueueEntry `json:"queueEntry"`
+	Idempotent bool       `json:"idempotent,omitempty"`
 }
 
 type PatientRecord struct {

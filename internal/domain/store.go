@@ -13,6 +13,8 @@ type Store interface {
 	CancelAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole Role, appointmentID string, input CancelAppointmentInput, idempotencyKey string) (AppointmentMutationResult, error)
 	Calendar(ctx context.Context, tenantID string) (map[string]any, error)
 	Queue(ctx context.Context, tenantID string) ([]QueueEntry, error)
+	RegisterWalkIn(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input RegisterWalkInInput, idempotencyKey string) (QueueMutationResult, error)
+	UpdateQueueStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, queueID string, status QueueStatus, input UpdateQueueInput, idempotencyKey string) (QueueMutationResult, error)
 	Patients(ctx context.Context, tenantID string) ([]PatientRecord, error)
 	PrescriptionTemplates(ctx context.Context, tenantID string) ([]PrescriptionTemplate, error)
 	ClinicalNotes(ctx context.Context, tenantID string) ([]ClinicalNote, error)
@@ -147,8 +149,36 @@ func (DemoStore) Calendar(ctx context.Context, tenantID string) (map[string]any,
 
 func (DemoStore) Queue(ctx context.Context, tenantID string) ([]QueueEntry, error) {
 	return []QueueEntry{
-		{ID: "queue_001", PetName: "Coco", OwnerName: "Morgan Lee", Species: "Dog", Priority: "normal", Status: "waiting", WaitMins: 8},
+		{ID: "queue_001", PetName: "Coco", OwnerName: "Morgan Lee", Species: "Dog", Priority: "normal", Status: QueueWaiting, WaitMins: 8},
 	}, nil
+}
+
+func (DemoStore) RegisterWalkIn(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input RegisterWalkInInput, idempotencyKey string) (QueueMutationResult, error) {
+	priority := input.Priority
+	if priority == "" {
+		priority = "normal"
+	}
+	return QueueMutationResult{QueueEntry: QueueEntry{
+		ID:        "queue_demo_created",
+		PetName:   "Demo Pet",
+		OwnerName: "Demo Guardian",
+		Species:   "dog",
+		Priority:  priority,
+		Status:    QueueWaiting,
+		WaitMins:  0,
+	}}, nil
+}
+
+func (DemoStore) UpdateQueueStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, queueID string, status QueueStatus, input UpdateQueueInput, idempotencyKey string) (QueueMutationResult, error) {
+	return QueueMutationResult{QueueEntry: QueueEntry{
+		ID:        queueID,
+		PetName:   "Demo Pet",
+		OwnerName: "Demo Guardian",
+		Species:   "dog",
+		Priority:  "normal",
+		Status:    status,
+		WaitMins:  0,
+	}}, nil
 }
 
 func (DemoStore) Patients(ctx context.Context, tenantID string) ([]PatientRecord, error) {

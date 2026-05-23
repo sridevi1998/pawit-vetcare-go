@@ -198,6 +198,57 @@ func TestCancelAppointmentRequiresReason(t *testing.T) {
 	}
 }
 
+func TestRegisterWalkInAllowsReceptionist(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"locationId":"loc_001","petId":"pet_001","reason":"Walk-in limping","priority":"urgent"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/queue/walk-ins", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, response.Code, response.Body.String())
+	}
+
+	var payload domain.QueueMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.QueueEntry.Status != domain.QueueWaiting {
+		t.Fatalf("expected waiting queue entry, got %q", payload.QueueEntry.Status)
+	}
+}
+
+func TestCallQueueEntryRejectsPetParent(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/queue/queue_001/call", strings.NewReader(`{}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RolePetParent))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
+func TestCompleteQueueEntryAllowsQueueManager(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/queue/queue_001/complete", strings.NewReader(`{}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleVeterinarian))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+}
+
 func hasPermission(policy domain.RolePolicy, permission domain.Permission) bool {
 	for _, item := range policy.Permissions {
 		if item == permission {

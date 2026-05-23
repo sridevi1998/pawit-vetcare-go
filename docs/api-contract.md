@@ -22,6 +22,11 @@ All application endpoints require:
 | `POST` | `/appointments/{id}/cancel` | Cancel an appointment with clinic cutoff enforcement |
 | `GET` | `/calendar` | Appointment calendar data |
 | `GET` | `/queue` | Walk-in and checked-in queue |
+| `POST` | `/queue/walk-ins` | Register a walk-in queue entry and linked appointment |
+| `POST` | `/queue/{id}/call` | Mark the next queue entry as called |
+| `POST` | `/queue/{id}/start` | Move a queue entry into consultation |
+| `POST` | `/queue/{id}/complete` | Complete a queue entry and linked appointment |
+| `POST` | `/queue/{id}/cancel` | Cancel a queue entry and linked appointment |
 | `GET` | `/pets` | Pet and pet-parent records |
 | `GET` | `/patients` | Pet and pet-parent records |
 | `GET` | `/prescription-templates` | Veterinary prescription templates |
@@ -37,6 +42,6 @@ All application endpoints require:
 
 - Add OpenAPI 3.1 spec in `pawit-vetcare-contracts`
 - Generate frontend TypeScript clients from OpenAPI
-- Expand PostgreSQL repositories with create/update workflows for queue, invoices, lab reports, staff, prescriptions, and documents
+- Expand PostgreSQL repositories with create/update workflows for invoices, lab reports, staff, prescriptions, and documents
 - Add idempotency-key support to the remaining mutation endpoints
 - Add shared contract tests for API responses used by the hospital portal

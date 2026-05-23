@@ -397,15 +397,204 @@ func (s PostgresStore) Queue(ctx context.Context, tenantID string) ([]domain.Que
 	items := []domain.QueueEntry{}
 	for rows.Next() {
 		var item domain.QueueEntry
-		if err := rows.Scan(&item.ID, &item.PetName, &item.OwnerName, &item.Species, &item.Priority, &item.Status, &item.WaitMins); err != nil {
+		var status string
+		if err := rows.Scan(&item.ID, &item.PetName, &item.OwnerName, &item.Species, &item.Priority, &status, &item.WaitMins); err != nil {
 			return nil, fmt.Errorf("scan queue entry: %w", err)
 		}
+		item.Status = domain.QueueStatus(status)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate queue: %w", err)
 	}
 	return items, nil
+}
+
+func (s PostgresStore) RegisterWalkIn(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.RegisterWalkInInput, idempotencyKey string) (domain.QueueMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionQueueManage) {
+		return domain.QueueMutationResult{}, domain.ErrForbidden
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.QueueMutationResult{}, fmt.Errorf("begin walk-in registration: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(input)
+	if result, ok, err := idempotentQueueResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	var activeCount int
+	err = tx.QueryRow(ctx, `
+		select count(*)
+		from queue_entries
+		where tenant_id = $1
+			and location_id = $2
+			and pet_id = $3
+			and status in ('waiting', 'called', 'in_progress')
+			and cancelled_at is null
+			and completed_at is null
+	`, tenantID, input.LocationID, input.PetID).Scan(&activeCount)
+	if err != nil {
+		return domain.QueueMutationResult{}, fmt.Errorf("check active queue entry: %w", err)
+	}
+	if activeCount > 0 {
+		return domain.QueueMutationResult{}, fmt.Errorf("%w: pet already has an active queue entry at this location", domain.ErrConflict)
+	}
+
+	var appointmentID string
+	err = tx.QueryRow(ctx, `
+		insert into appointments (
+			tenant_id,
+			location_id,
+			pet_id,
+			requested_by_user_id,
+			type,
+			status,
+			reason
+		)
+		values ($1, $2, $3, $4, 'walk_in', 'waiting', $5)
+		returning id::text
+	`, tenantID, input.LocationID, input.PetID, uuidOrNil(actorUserID), strings.TrimSpace(input.Reason)).Scan(&appointmentID)
+	if err != nil {
+		return domain.QueueMutationResult{}, fmt.Errorf("create walk-in appointment: %w", err)
+	}
+
+	priority := strings.TrimSpace(input.Priority)
+	if priority == "" {
+		priority = "normal"
+	}
+
+	var queueID string
+	err = tx.QueryRow(ctx, `
+		insert into queue_entries (
+			tenant_id,
+			location_id,
+			appointment_id,
+			pet_id,
+			status,
+			priority,
+			reason
+		)
+		values ($1, $2, $3, $4, 'waiting', $5, $6)
+		returning id::text
+	`, tenantID, input.LocationID, appointmentID, input.PetID, priority, nullString(input.Reason)).Scan(&queueID)
+	if err != nil {
+		return domain.QueueMutationResult{}, fmt.Errorf("create queue entry: %w", err)
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "queue.walk_in.register", "queue_entry", queueID, input.Reason); err != nil {
+		return domain.QueueMutationResult{}, err
+	}
+
+	entry, err := queueEntryByID(ctx, tx, tenantID, queueID)
+	if err != nil {
+		return domain.QueueMutationResult{}, err
+	}
+	result := domain.QueueMutationResult{QueueEntry: entry}
+	if err := rememberQueueIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusCreated, result); err != nil {
+		return domain.QueueMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.QueueMutationResult{}, fmt.Errorf("commit walk-in registration: %w", err)
+	}
+	return result, nil
+}
+
+func (s PostgresStore) UpdateQueueStatus(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, queueID string, status domain.QueueStatus, input domain.UpdateQueueInput, idempotencyKey string) (domain.QueueMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionQueueManage) {
+		return domain.QueueMutationResult{}, domain.ErrForbidden
+	}
+	if !validQueueStatus(status) || status == domain.QueueWaiting {
+		return domain.QueueMutationResult{}, fmt.Errorf("%w: unsupported queue status transition", domain.ErrValidation)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.QueueMutationResult{}, fmt.Errorf("begin queue update: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(struct {
+		QueueID string
+		Status  domain.QueueStatus
+		Input   domain.UpdateQueueInput
+	}{QueueID: queueID, Status: status, Input: input})
+	if result, ok, err := idempotentQueueResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	var currentStatus string
+	var appointmentID sql.NullString
+	err = tx.QueryRow(ctx, `
+		select status::text, appointment_id::text
+		from queue_entries
+		where tenant_id = $1 and id = $2
+		for update
+	`, tenantID, queueID).Scan(&currentStatus, &appointmentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.QueueMutationResult{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.QueueMutationResult{}, fmt.Errorf("read queue entry: %w", err)
+	}
+
+	if !queueTransitionAllowed(domain.QueueStatus(currentStatus), status) {
+		return domain.QueueMutationResult{}, fmt.Errorf("%w: queue entry cannot move from %s to %s", domain.ErrConflict, currentStatus, status)
+	}
+
+	updateSQL, appointmentStatus := queueStatusUpdateSQL(status)
+	command, err := tx.Exec(ctx, updateSQL, tenantID, queueID)
+	if err != nil {
+		return domain.QueueMutationResult{}, fmt.Errorf("update queue entry: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return domain.QueueMutationResult{}, domain.ErrNotFound
+	}
+
+	if appointmentID.Valid && appointmentStatus != "" {
+		if _, err := tx.Exec(ctx, `
+			update appointments
+			set status = $3,
+				updated_at = now()
+			where tenant_id = $1 and id = $2 and archived_at is null
+		`, tenantID, appointmentID.String, appointmentStatus); err != nil {
+			return domain.QueueMutationResult{}, fmt.Errorf("update queue appointment status: %w", err)
+		}
+	}
+	if status == domain.QueueCancelled && appointmentID.Valid {
+		if _, err := tx.Exec(ctx, `
+			update appointments
+			set status = 'cancelled',
+				cancellation_reason = $3,
+				cancelled_at = now(),
+				updated_at = now()
+			where tenant_id = $1 and id = $2 and archived_at is null
+		`, tenantID, appointmentID.String, nullString(input.Reason)); err != nil {
+			return domain.QueueMutationResult{}, fmt.Errorf("cancel queue appointment: %w", err)
+		}
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "queue."+string(status), "queue_entry", queueID, input.Reason); err != nil {
+		return domain.QueueMutationResult{}, err
+	}
+
+	entry, err := queueEntryByID(ctx, tx, tenantID, queueID)
+	if err != nil {
+		return domain.QueueMutationResult{}, err
+	}
+	result := domain.QueueMutationResult{QueueEntry: entry}
+	if err := rememberQueueIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusOK, result); err != nil {
+		return domain.QueueMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.QueueMutationResult{}, fmt.Errorf("commit queue update: %w", err)
+	}
+	return result, nil
 }
 
 func (s PostgresStore) Patients(ctx context.Context, tenantID string) ([]domain.PatientRecord, error) {
@@ -854,6 +1043,39 @@ func appointmentByID(ctx context.Context, q rowQuerier, tenantID string, appoint
 	return item, nil
 }
 
+func queueEntryByID(ctx context.Context, q rowQuerier, tenantID string, queueID string) (domain.QueueEntry, error) {
+	var item domain.QueueEntry
+	var status string
+	err := q.QueryRow(ctx, `
+		select
+			q.id::text,
+			p.name,
+			coalesce(g.name, ''),
+			p.species::text,
+			q.priority,
+			q.status::text,
+			greatest(0, floor(extract(epoch from (now() - q.checked_in_at)) / 60))::int
+		from queue_entries q
+		join pets p on p.id = q.pet_id and p.tenant_id = q.tenant_id
+		left join lateral (
+			select name
+			from pet_guardians
+			where tenant_id = q.tenant_id and pet_id = q.pet_id and archived_at is null
+			order by is_primary desc, created_at
+			limit 1
+		) g on true
+		where q.tenant_id = $1 and q.id = $2
+	`, tenantID, queueID).Scan(&item.ID, &item.PetName, &item.OwnerName, &item.Species, &item.Priority, &status, &item.WaitMins)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.QueueEntry{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.QueueEntry{}, fmt.Errorf("read queue entry: %w", err)
+	}
+	item.Status = domain.QueueStatus(status)
+	return item, nil
+}
+
 func roleHasAny(role domain.Role, permissions ...domain.Permission) bool {
 	for _, policy := range domain.PawItRolePolicies() {
 		if policy.Role != role {
@@ -868,6 +1090,63 @@ func roleHasAny(role domain.Role, permissions ...domain.Permission) bool {
 		}
 	}
 	return false
+}
+
+func validQueueStatus(status domain.QueueStatus) bool {
+	switch status {
+	case domain.QueueWaiting, domain.QueueCalled, domain.QueueInProgress, domain.QueueCompleted, domain.QueueCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func queueTransitionAllowed(current domain.QueueStatus, next domain.QueueStatus) bool {
+	switch current {
+	case domain.QueueWaiting:
+		return next == domain.QueueCalled || next == domain.QueueInProgress || next == domain.QueueCancelled
+	case domain.QueueCalled:
+		return next == domain.QueueInProgress || next == domain.QueueCompleted || next == domain.QueueCancelled
+	case domain.QueueInProgress:
+		return next == domain.QueueCompleted || next == domain.QueueCancelled
+	default:
+		return false
+	}
+}
+
+func queueStatusUpdateSQL(status domain.QueueStatus) (string, string) {
+	switch status {
+	case domain.QueueCalled:
+		return `
+			update queue_entries
+			set status = 'called',
+				called_at = now()
+			where tenant_id = $1 and id = $2
+		`, string(domain.AppointmentCheckedIn)
+	case domain.QueueInProgress:
+		return `
+			update queue_entries
+			set status = 'in_progress',
+				called_at = coalesce(called_at, now())
+			where tenant_id = $1 and id = $2
+		`, string(domain.AppointmentInProgress)
+	case domain.QueueCompleted:
+		return `
+			update queue_entries
+			set status = 'completed',
+				completed_at = now()
+			where tenant_id = $1 and id = $2
+		`, string(domain.AppointmentCompleted)
+	case domain.QueueCancelled:
+		return `
+			update queue_entries
+			set status = 'cancelled',
+				cancelled_at = now()
+			where tenant_id = $1 and id = $2
+		`, ""
+	default:
+		return "", ""
+	}
 }
 
 func parseOptionalTime(value *string) (any, error) {
@@ -917,7 +1196,57 @@ func idempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key strin
 	return result, true, nil
 }
 
+func idempotentQueueResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string) (domain.QueueMutationResult, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return domain.QueueMutationResult{}, false, nil
+	}
+
+	var existingHash string
+	var body []byte
+	err := tx.QueryRow(ctx, `
+		select request_hash, response_body
+		from idempotency_keys
+		where tenant_id = $1 and key = $2 and expires_at > now()
+	`, tenantID, key).Scan(&existingHash, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.QueueMutationResult{}, false, nil
+	}
+	if err != nil {
+		return domain.QueueMutationResult{}, false, fmt.Errorf("read idempotency key: %w", err)
+	}
+	if existingHash != requestHash {
+		return domain.QueueMutationResult{}, true, fmt.Errorf("%w: idempotency key was already used with a different request", domain.ErrConflict)
+	}
+	var result domain.QueueMutationResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return domain.QueueMutationResult{}, false, fmt.Errorf("decode idempotent response: %w", err)
+	}
+	result.Idempotent = true
+	return result, true, nil
+}
+
 func rememberIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.AppointmentMutationResult) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode idempotent response: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		insert into idempotency_keys (tenant_id, key, request_hash, response_status, response_body)
+		values ($1, $2, $3, $4, $5)
+		on conflict (tenant_id, key) do nothing
+	`, tenantID, key, requestHash, status, body)
+	if err != nil {
+		return fmt.Errorf("record idempotency key: %w", err)
+	}
+	return nil
+}
+
+func rememberQueueIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.QueueMutationResult) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil
