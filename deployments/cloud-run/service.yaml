@@ -1,0 +1,38 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: pawit-vetcare-api
+  annotations:
+    run.googleapis.com/ingress: internal-and-cloud-load-balancing
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "20"
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/vpc-access-egress: private-ranges-only
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 30
+      containers:
+        - image: asia-south1-docker.pkg.dev/PROJECT_ID/pawit/pawit-vetcare-api:COMMIT_SHA
+          ports:
+            - name: http1
+              containerPort: 8080
+          env:
+            - name: PAWIT_ENV
+              value: production
+            - name: PAWIT_ALLOW_DEV_AUTH
+              value: "false"
+            - name: PAWIT_ALLOWED_ORIGINS
+              value: https://hospital.pawit.care,https://app.pawit.care
+            - name: PAWIT_JWT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pawit-jwt-signing-key
+                  key: latest
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi

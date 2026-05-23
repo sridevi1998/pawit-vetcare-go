@@ -1,1 +1,50 @@
-# pawit-vetcare-go
+# PawIt VetCare API
+
+Serverless-ready Go backend for PawIt VetCare, a multi-tenant veterinary hospital management platform inspired by the Docran HMS UI and workflows.
+
+## What Is Included
+
+- Go API entrypoint for Cloud Run
+- Secure-by-default middleware: auth boundary, tenant scope, CORS allow-listing, security headers, request size limits, rate limiting
+- Veterinary HMS response contracts for appointments, calendar, queue, pet records, prescriptions, clinical notes, labs, billing, analytics, feedback, doctors, and staff
+- Dockerfile using a non-root distroless runtime
+- GitHub Actions CI with formatting, tests, vulnerability scan, container build, and Trivy scan
+- Cloud Run service manifest
+- Architecture and GitHub access docs
+
+## Run Locally
+
+```sh
+PAWIT_ALLOW_DEV_AUTH=true go run .
+```
+
+Then call:
+
+```sh
+curl http://localhost:8080/healthz
+curl -H "X-PawIt-Tenant-ID: tenant_demo_clinic" http://localhost:8080/api/v1/patients
+```
+
+## Production Environment
+
+Required:
+
+- `PAWIT_ENV=production`
+- `PAWIT_ALLOW_DEV_AUTH=false`
+- `PAWIT_JWT_SIGNING_KEY` from Google Secret Manager
+- `PAWIT_ALLOWED_ORIGINS` with the deployed frontend origins
+
+## Target Platform
+
+- Runtime: Google Cloud Run serverless containers
+- Region: `asia-south1` unless you choose otherwise
+- Database: PostgreSQL 17 on Cloud SQL, private IP only
+- Cache/realtime: Memorystore Redis
+- Storage: Google Cloud Storage signed URLs
+- AI: Vertex AI Gemini advisory features
+- Email/SMS/push: AWS SES, MSG91, Firebase FCM
+- Payments: Razorpay
+
+See [docs/architecture.md](docs/architecture.md) and [docs/github-access.md](docs/github-access.md).
+
+The current API surface is summarized in [docs/api-contract.md](docs/api-contract.md).
