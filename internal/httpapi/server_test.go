@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -49,6 +50,103 @@ func TestAPIAllowsTenantScopedDevAuth(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
 	}
+}
+
+func TestPetsEndpointAliasesPetRecords(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/pets", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+}
+
+func TestProductSpecMatchesApprovedV1Scope(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/product-spec", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+
+	var payload struct {
+		PaymentProvider string `json:"paymentProvider"`
+		Currency        string `json:"currency"`
+		GroomingEnabled bool   `json:"groomingEnabled"`
+		Telemedicine    struct {
+			Mode string `json:"mode"`
+		} `json:"telemedicine"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.PaymentProvider != "stripe" {
+		t.Fatalf("expected stripe payment provider, got %q", payload.PaymentProvider)
+	}
+	if payload.Currency != "USD" {
+		t.Fatalf("expected USD currency, got %q", payload.Currency)
+	}
+	if payload.GroomingEnabled {
+		t.Fatal("grooming should be out of scope for v1")
+	}
+	if payload.Telemedicine.Mode != "manual_meeting_link" {
+		t.Fatalf("expected manual meeting links, got %q", payload.Telemedicine.Mode)
+	}
+}
+
+func TestRolePoliciesExposePetParentAndLabTechnicianRules(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/role-policies", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+
+	var payload struct {
+		Items []domain.RolePolicy `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	roles := map[domain.Role]domain.RolePolicy{}
+	for _, item := range payload.Items {
+		roles[item.Role] = item
+	}
+
+	if _, ok := roles[domain.RolePetParent]; !ok {
+		t.Fatal("expected PetParent role policy")
+	}
+	if _, ok := roles[domain.RoleLabTechnician]; !ok {
+		t.Fatal("expected LabTechnician role policy")
+	}
+	if hasPermission(roles[domain.RoleLabTechnician], domain.PermissionInvoiceManage) {
+		t.Fatal("LabTechnician should not manage invoices")
+	}
+	if !hasPermission(roles[domain.RolePetParent], domain.PermissionAppointmentRequestOwn) {
+		t.Fatal("PetParent should be able to request own appointments")
+	}
+}
+
+func hasPermission(policy domain.RolePolicy, permission domain.Permission) bool {
+	for _, item := range policy.Permissions {
+		if item == permission {
+			return true
+		}
+	}
+	return false
 }
 
 func testConfig() config.Config {

@@ -37,9 +37,8 @@ To create separate repositories and deploy PawIt VetCare, I need you to provide 
 ## Third Parties
 
 - AWS SES sender/domain credentials
-- MSG91 credentials
 - Firebase project credentials for FCM
-- Razorpay key ID and secret
+- Stripe secret key, webhook signing secret, and Apple Pay domain verification details
 - Google Vertex AI project access
 - Production domains and DNS access
 

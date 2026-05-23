@@ -38,7 +38,7 @@ The backend replaces Docran's TypeScript/Express service with Go. Recommended pr
 - Vaccination and deworming plans
 - Veterinary prescriptions and templates
 - Lab and diagnostics
-- Billing, invoices, Razorpay payments
+- Billing, invoices, Stripe payments, and Apple Pay readiness
 - Staff and veterinarian management
 - Feedback and analytics
 - Teleconsultation and pet-parent self service

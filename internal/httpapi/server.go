@@ -31,11 +31,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /readyz", s.ready)
 	s.mux.HandleFunc("GET /api/v1/me", s.me)
+	s.mux.HandleFunc("GET /api/v1/product-spec", s.productSpec)
+	s.mux.HandleFunc("GET /api/v1/role-policies", s.rolePolicies)
 	s.mux.HandleFunc("GET /api/v1/navigation", s.navigation)
 	s.mux.HandleFunc("GET /api/v1/dashboard/summary", s.summary)
 	s.mux.HandleFunc("GET /api/v1/appointments", s.appointments)
 	s.mux.HandleFunc("GET /api/v1/calendar", s.calendar)
 	s.mux.HandleFunc("GET /api/v1/queue", s.queue)
+	s.mux.HandleFunc("GET /api/v1/pets", s.patients)
 	s.mux.HandleFunc("GET /api/v1/patients", s.patients)
 	s.mux.HandleFunc("GET /api/v1/prescription-templates", s.prescriptionTemplates)
 	s.mux.HandleFunc("GET /api/v1/clinical-notes", s.clinicalNotes)
@@ -73,6 +76,14 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) navigation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"sections": s.store.Navigation()})
+}
+
+func (s *Server) productSpec(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.store.ProductSpec())
+}
+
+func (s *Server) rolePolicies(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.RolePolicies()})
 }
 
 func (s *Server) summary(w http.ResponseWriter, r *http.Request) {

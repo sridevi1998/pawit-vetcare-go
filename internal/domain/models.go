@@ -19,14 +19,17 @@ type NavItem struct {
 }
 
 type Appointment struct {
-	ID        string `json:"id"`
-	PetName   string `json:"petName"`
-	OwnerName string `json:"ownerName"`
-	VetName   string `json:"vetName"`
-	Time      string `json:"time"`
-	Type      string `json:"type"`
-	Status    string `json:"status"`
-	Contact   string `json:"contact"`
+	ID                      string            `json:"id"`
+	PetName                 string            `json:"petName"`
+	OwnerName               string            `json:"ownerName"`
+	PrimaryVeterinarian     string            `json:"primaryVeterinarian"`
+	AdditionalVeterinarians []string          `json:"additionalVeterinarians"`
+	Time                    string            `json:"time"`
+	Type                    AppointmentType   `json:"type"`
+	Status                  AppointmentStatus `json:"status"`
+	Contact                 string            `json:"contact"`
+	MeetingURL              string            `json:"meetingUrl,omitempty"`
+	Reason                  string            `json:"reason"`
 }
 
 type QueueEntry struct {
@@ -40,17 +43,19 @@ type QueueEntry struct {
 }
 
 type PatientRecord struct {
-	ID          string `json:"id"`
-	PetName     string `json:"petName"`
-	OwnerName   string `json:"ownerName"`
-	Species     string `json:"species"`
-	Breed       string `json:"breed"`
-	Age         string `json:"age"`
-	Sex         string `json:"sex"`
-	Phone       string `json:"phone"`
-	LastVisit   string `json:"lastVisit"`
-	VaccinesDue int    `json:"vaccinesDue"`
-	OpenPlans   int    `json:"openPlans"`
+	ID             string `json:"id"`
+	PetName        string `json:"petName"`
+	OwnerName      string `json:"ownerName"`
+	Species        string `json:"species"`
+	Breed          string `json:"breed"`
+	Age            string `json:"age"`
+	Sex            string `json:"sex"`
+	Phone          string `json:"phone"`
+	LastVisit      string `json:"lastVisit"`
+	VaccinesDue    int    `json:"vaccinesDue"`
+	OpenPlans      int    `json:"openPlans"`
+	GuardianCount  int    `json:"guardianCount"`
+	DocumentsCount int    `json:"documentsCount"`
 }
 
 type PrescriptionTemplate struct {
@@ -63,22 +68,25 @@ type PrescriptionTemplate struct {
 }
 
 type ClinicalNote struct {
-	ID        string `json:"id"`
-	PetName   string `json:"petName"`
-	OwnerName string `json:"ownerName"`
-	Subject   string `json:"subject"`
-	Status    string `json:"status"`
-	UpdatedAt string `json:"updatedAt"`
+	ID                  string `json:"id"`
+	PetName             string `json:"petName"`
+	OwnerName           string `json:"ownerName"`
+	Subject             string `json:"subject"`
+	Status              string `json:"status"`
+	UpdatedAt           string `json:"updatedAt"`
+	SharedWithPetParent bool   `json:"sharedWithPetParent"`
 }
 
 type LabTest struct {
-	ID        string `json:"id"`
-	PetName   string `json:"petName"`
-	OwnerName string `json:"ownerName"`
-	TestType  string `json:"testType"`
-	LabCenter string `json:"labCenter"`
-	Status    string `json:"status"`
-	ReportURL string `json:"reportUrl,omitempty"`
+	ID                  string         `json:"id"`
+	PetName             string         `json:"petName"`
+	OwnerName           string         `json:"ownerName"`
+	TestType            string         `json:"testType"`
+	LabCenter           string         `json:"labCenter"`
+	LabType             string         `json:"labType"`
+	Status              LabOrderStatus `json:"status"`
+	ReportURL           string         `json:"reportUrl,omitempty"`
+	SharedWithPetParent bool           `json:"sharedWithPetParent"`
 }
 
 type Invoice struct {

@@ -13,11 +13,14 @@ All application endpoints require:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/me` | Current user, role, tenant, and clinic context |
+| `GET` | `/product-spec` | Approved v1 product policy: species, statuses, payment provider, telemedicine, labs, cancellation |
+| `GET` | `/role-policies` | Role and permission policy matrix from the spec |
 | `GET` | `/navigation` | Sidebar sections for Docran-style hospital portal layout |
 | `GET` | `/dashboard/summary` | Top-level operational metrics |
 | `GET` | `/appointments` | Appointment list |
 | `GET` | `/calendar` | Appointment calendar data |
 | `GET` | `/queue` | Walk-in and checked-in queue |
+| `GET` | `/pets` | Pet and pet-parent records |
 | `GET` | `/patients` | Pet and pet-parent records |
 | `GET` | `/prescription-templates` | Veterinary prescription templates |
 | `GET` | `/clinical-notes` | SOAP notes and consultations |

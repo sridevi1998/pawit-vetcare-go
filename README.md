@@ -22,7 +22,7 @@ Then call:
 
 ```sh
 curl http://localhost:8080/healthz
-curl -H "X-PawIt-Tenant-ID: tenant_demo_clinic" http://localhost:8080/api/v1/patients
+curl -H "X-PawIt-Tenant-ID: tenant_demo_clinic" http://localhost:8080/api/v1/pets
 ```
 
 ## Production Environment
@@ -42,8 +42,8 @@ Required:
 - Cache/realtime: Memorystore Redis
 - Storage: Google Cloud Storage signed URLs
 - AI: Vertex AI Gemini advisory features
-- Email/SMS/push: AWS SES, MSG91, Firebase FCM
-- Payments: Razorpay
+- Email/push: AWS SES and Firebase FCM
+- Payments: Stripe with Apple Pay readiness
 
 See [docs/architecture.md](docs/architecture.md) and [docs/github-access.md](docs/github-access.md).
 
