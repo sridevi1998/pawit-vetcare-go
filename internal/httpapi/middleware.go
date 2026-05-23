@@ -81,7 +81,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			h := w.Header()
 			h.Set("Access-Control-Allow-Origin", origin)
 			h.Set("Access-Control-Allow-Credentials", "true")
-			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-PawIt-Tenant-ID, X-Request-ID")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-PawIt-Tenant-ID, X-PawIt-User-ID, X-PawIt-Role, X-Request-ID")
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			h.Set("Vary", "Origin")
 		}

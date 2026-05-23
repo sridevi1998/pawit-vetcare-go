@@ -14,11 +14,11 @@ func TestMigrationsAreEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load down migrations: %v", err)
 	}
-	if len(up) != 1 {
-		t.Fatalf("expected 1 up migration, got %d", len(up))
+	if len(up) != 2 {
+		t.Fatalf("expected 2 up migrations, got %d", len(up))
 	}
-	if len(down) != 1 {
-		t.Fatalf("expected 1 down migration, got %d", len(down))
+	if len(down) != 2 {
+		t.Fatalf("expected 2 down migrations, got %d", len(down))
 	}
 }
 

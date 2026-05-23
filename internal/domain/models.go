@@ -32,6 +32,29 @@ type Appointment struct {
 	Reason                  string            `json:"reason"`
 }
 
+type CreateAppointmentInput struct {
+	LocationID                string          `json:"locationId"`
+	PetID                     string          `json:"petId"`
+	Type                      AppointmentType `json:"type"`
+	Reason                    string          `json:"reason"`
+	StartsAt                  *string         `json:"startsAt,omitempty"`
+	EndsAt                    *string         `json:"endsAt,omitempty"`
+	PrimaryVeterinarianID     string          `json:"primaryVeterinarianId,omitempty"`
+	AdditionalVeterinarianIDs []string        `json:"additionalVeterinarianIds,omitempty"`
+	MeetingURL                string          `json:"meetingUrl,omitempty"`
+	RequestedByPetParent      bool            `json:"requestedByPetParent,omitempty"`
+}
+
+type CancelAppointmentInput struct {
+	Reason        string `json:"reason"`
+	StaffOverride bool   `json:"staffOverride,omitempty"`
+}
+
+type AppointmentMutationResult struct {
+	Appointment Appointment `json:"appointment"`
+	Idempotent  bool        `json:"idempotent,omitempty"`
+}
+
 type QueueEntry struct {
 	ID        string `json:"id"`
 	PetName   string `json:"petName"`

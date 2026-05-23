@@ -3,8 +3,10 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"pawit-vetcare/internal/config"
@@ -38,6 +40,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/navigation", s.navigation)
 	s.mux.HandleFunc("GET /api/v1/dashboard/summary", s.summary)
 	s.mux.HandleFunc("GET /api/v1/appointments", s.appointments)
+	s.mux.HandleFunc("POST /api/v1/appointments", s.createAppointment)
+	s.mux.HandleFunc("POST /api/v1/appointments/{id}/cancel", s.cancelAppointment)
 	s.mux.HandleFunc("GET /api/v1/calendar", s.calendar)
 	s.mux.HandleFunc("GET /api/v1/queue", s.queue)
 	s.mux.HandleFunc("GET /api/v1/pets", s.patients)
@@ -111,6 +115,54 @@ func (s *Server) appointments(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
 	items, err := s.store.Appointments(r.Context(), auth.TenantID)
 	writeData(w, map[string]any{"items": items}, err)
+}
+
+func (s *Server) createAppointment(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionAppointmentManage, domain.PermissionAppointmentRequestOwn) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot create appointments.")
+		return
+	}
+
+	var input domain.CreateAppointmentInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateCreateAppointment(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.CreateAppointment(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
+	writeMutation(w, http.StatusCreated, result, err)
+}
+
+func (s *Server) cancelAppointment(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionAppointmentManage, domain.PermissionAppointmentRequestOwn) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot cancel appointments.")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Appointment ID is required.")
+		return
+	}
+
+	var input domain.CancelAppointmentInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if strings.TrimSpace(input.Reason) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Cancellation reason is required.")
+		return
+	}
+
+	result, err := s.store.CancelAppointment(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), id, input, idempotencyKey(r))
+	writeMutation(w, http.StatusOK, result, err)
 }
 
 func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
@@ -196,6 +248,90 @@ func writeData(w http.ResponseWriter, payload any, err error) {
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)
+}
+
+func writeMutation(w http.ResponseWriter, status int, payload any, err error) {
+	if err == nil {
+		writeJSON(w, status, payload)
+		return
+	}
+	switch {
+	case errors.Is(err, domain.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", err.Error())
+	case errors.Is(err, domain.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", err.Error())
+	case errors.Is(err, domain.ErrConflict):
+		writeError(w, http.StatusConflict, "conflict", err.Error())
+	case errors.Is(err, domain.ErrValidation):
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+	default:
+		slog.Error("mutation failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "PawIt could not complete the request.")
+	}
+}
+
+func decodeJSON(r *http.Request, target any) error {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateCreateAppointment(input domain.CreateAppointmentInput) error {
+	if strings.TrimSpace(input.LocationID) == "" {
+		return errors.New("locationId is required")
+	}
+	if strings.TrimSpace(input.PetID) == "" {
+		return errors.New("petId is required")
+	}
+	if strings.TrimSpace(input.Reason) == "" {
+		return errors.New("reason is required")
+	}
+	if !validAppointmentType(input.Type) {
+		return errors.New("type is not supported")
+	}
+	if input.StartsAt != nil {
+		if _, err := time.Parse(time.RFC3339, *input.StartsAt); err != nil {
+			return errors.New("startsAt must be RFC3339")
+		}
+	}
+	if input.EndsAt != nil {
+		if _, err := time.Parse(time.RFC3339, *input.EndsAt); err != nil {
+			return errors.New("endsAt must be RFC3339")
+		}
+	}
+	return nil
+}
+
+func validAppointmentType(value domain.AppointmentType) bool {
+	for _, item := range domain.PawItProductSpec().SupportedAppointmentTypes {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+func roleCan(role string, permissions ...domain.Permission) bool {
+	for _, policy := range domain.PawItRolePolicies() {
+		if string(policy.Role) != role {
+			continue
+		}
+		for _, granted := range policy.Permissions {
+			for _, required := range permissions {
+				if granted == required {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func idempotencyKey(r *http.Request) string {
+	return strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 }
 
 func writeError(w http.ResponseWriter, status int, code string, message string) {

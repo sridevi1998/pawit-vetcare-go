@@ -50,7 +50,15 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 				if tenantID == "" {
 					tenantID = "tenant_demo_clinic"
 				}
-				auth = AuthContext{UserID: "dev_user", Role: "SuperAdmin", TenantID: tenantID}
+				userID := strings.TrimSpace(r.Header.Get("X-PawIt-User-ID"))
+				if userID == "" {
+					userID = "dev_user"
+				}
+				role := strings.TrimSpace(r.Header.Get("X-PawIt-Role"))
+				if role == "" {
+					role = "SuperAdmin"
+				}
+				auth = AuthContext{UserID: userID, Role: role, TenantID: tenantID}
 			} else {
 				writeError(w, http.StatusUnauthorized, "authentication_required", "A valid PawIt access token is required.")
 				return

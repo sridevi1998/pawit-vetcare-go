@@ -9,6 +9,8 @@ type Store interface {
 	Navigation(ctx context.Context, tenantID string) ([]NavSection, error)
 	Summary(ctx context.Context, tenantID string) ([]Metric, error)
 	Appointments(ctx context.Context, tenantID string) ([]Appointment, error)
+	CreateAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateAppointmentInput, idempotencyKey string) (AppointmentMutationResult, error)
+	CancelAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole Role, appointmentID string, input CancelAppointmentInput, idempotencyKey string) (AppointmentMutationResult, error)
 	Calendar(ctx context.Context, tenantID string) (map[string]any, error)
 	Queue(ctx context.Context, tenantID string) ([]QueueEntry, error)
 	Patients(ctx context.Context, tenantID string) ([]PatientRecord, error)
@@ -85,6 +87,43 @@ func (DemoStore) Appointments(ctx context.Context, tenantID string) ([]Appointme
 			PrimaryVeterinarian: "Dr. Vikram Sen", AdditionalVeterinarians: []string{},
 			Time: "11:00", Type: AppointmentTelemedicine, Status: AppointmentRequested,
 			Contact: "+14155550192", MeetingURL: "https://meet.example.com/pawit-demo", Reason: "Follow-up on skin irritation",
+		},
+	}, nil
+}
+
+func (DemoStore) CreateAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateAppointmentInput, idempotencyKey string) (AppointmentMutationResult, error) {
+	status := AppointmentScheduled
+	if actorRole == RolePetParent || input.RequestedByPetParent {
+		status = AppointmentRequested
+	}
+	timeLabel := "Unscheduled"
+	if input.StartsAt != nil && *input.StartsAt != "" {
+		timeLabel = *input.StartsAt
+	}
+	return AppointmentMutationResult{
+		Appointment: Appointment{
+			ID:                      "apt_demo_created",
+			PetName:                 "Demo Pet",
+			OwnerName:               "Demo Guardian",
+			PrimaryVeterinarian:     "Unassigned",
+			AdditionalVeterinarians: []string{},
+			Time:                    timeLabel,
+			Type:                    input.Type,
+			Status:                  status,
+			Contact:                 "",
+			MeetingURL:              input.MeetingURL,
+			Reason:                  input.Reason,
+		},
+	}, nil
+}
+
+func (DemoStore) CancelAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole Role, appointmentID string, input CancelAppointmentInput, idempotencyKey string) (AppointmentMutationResult, error) {
+	return AppointmentMutationResult{
+		Appointment: Appointment{
+			ID:      appointmentID,
+			PetName: "Demo Pet",
+			Status:  AppointmentCancelled,
+			Reason:  input.Reason,
 		},
 	}, nil
 }

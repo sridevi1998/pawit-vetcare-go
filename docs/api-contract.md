@@ -18,6 +18,8 @@ All application endpoints require:
 | `GET` | `/navigation` | Sidebar sections for Docran-style hospital portal layout |
 | `GET` | `/dashboard/summary` | Top-level operational metrics |
 | `GET` | `/appointments` | Appointment list |
+| `POST` | `/appointments` | Create a staff-managed appointment or pet-parent appointment request |
+| `POST` | `/appointments/{id}/cancel` | Cancel an appointment with clinic cutoff enforcement |
 | `GET` | `/calendar` | Appointment calendar data |
 | `GET` | `/queue` | Walk-in and checked-in queue |
 | `GET` | `/pets` | Pet and pet-parent records |
@@ -35,6 +37,6 @@ All application endpoints require:
 
 - Add OpenAPI 3.1 spec in `pawit-vetcare-contracts`
 - Generate frontend TypeScript clients from OpenAPI
-- Expand PostgreSQL repositories with create/update workflows
-- Add mutation endpoints with idempotency keys for appointments, queue, invoices, lab reports, staff, and prescriptions
+- Expand PostgreSQL repositories with create/update workflows for queue, invoices, lab reports, staff, prescriptions, and documents
+- Add idempotency-key support to the remaining mutation endpoints
 - Add shared contract tests for API responses used by the hospital portal

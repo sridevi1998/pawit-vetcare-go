@@ -20,6 +20,8 @@ Migration files live in:
 
 - `internal/database/migrations/0001_pawit_core_schema.up.sql`
 - `internal/database/migrations/0001_pawit_core_schema.down.sql`
+- `internal/database/migrations/0002_mutation_idempotency.up.sql`
+- `internal/database/migrations/0002_mutation_idempotency.down.sql`
 
 The Go package `internal/database` embeds migrations so the future deploy/migration job can load them in order.
 The API uses the same schema for tenant-scoped read endpoints whenever `PAWIT_DATABASE_URL` is configured.
@@ -65,6 +67,7 @@ The Cloud Run migration job manifest is in `deployments/cloud-run/migration-job.
 - `payments`
 - `support_access_sessions`
 - `audit_logs`
+- `idempotency_keys`
 
 ## Next Persistence Step
 

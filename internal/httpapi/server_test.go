@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"pawit-vetcare/internal/config"
@@ -137,6 +138,63 @@ func TestRolePoliciesExposePetParentAndLabTechnicianRules(t *testing.T) {
 	}
 	if !hasPermission(roles[domain.RolePetParent], domain.PermissionAppointmentRequestOwn) {
 		t.Fatal("PetParent should be able to request own appointments")
+	}
+}
+
+func TestCreateAppointmentAllowsPetParentRequests(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{
+		"locationId": "loc_001",
+		"petId": "pet_001",
+		"type": "telemedicine",
+		"reason": "Skin follow-up"
+	}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/appointments", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RolePetParent))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, response.Code, response.Body.String())
+	}
+
+	var payload domain.AppointmentMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Appointment.Status != domain.AppointmentRequested {
+		t.Fatalf("expected requested appointment, got %q", payload.Appointment.Status)
+	}
+}
+
+func TestCreateAppointmentRejectsUnsupportedRole(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"locationId":"loc_001","petId":"pet_001","type":"in_clinic","reason":"Visit"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/appointments", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleLabTechnician))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
+func TestCancelAppointmentRequiresReason(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/appointments/apt_001/cancel", strings.NewReader(`{}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
 	}
 }
 

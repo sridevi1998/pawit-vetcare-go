@@ -2,12 +2,17 @@ package database
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"pawit-vetcare/internal/domain"
@@ -17,6 +22,11 @@ type PostgresStore struct {
 	pool *pgxpool.Pool
 	demo domain.DemoStore
 }
+
+const (
+	httpStatusOK      = 200
+	httpStatusCreated = 201
+)
 
 func NewPostgresStore(pool *pgxpool.Pool) PostgresStore {
 	return PostgresStore{pool: pool, demo: domain.NewDemoStore()}
@@ -132,6 +142,203 @@ func (s PostgresStore) Appointments(ctx context.Context, tenantID string) ([]dom
 		return nil, fmt.Errorf("iterate appointments: %w", err)
 	}
 	return items, nil
+}
+
+func (s PostgresStore) CreateAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateAppointmentInput, idempotencyKey string) (domain.AppointmentMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionAppointmentManage, domain.PermissionAppointmentRequestOwn) {
+		return domain.AppointmentMutationResult{}, domain.ErrForbidden
+	}
+
+	status := domain.AppointmentRequested
+	if actorRole != domain.RolePetParent && !input.RequestedByPetParent && input.StartsAt != nil {
+		status = domain.AppointmentScheduled
+	}
+	if input.Type == domain.AppointmentTelemedicine && status != domain.AppointmentRequested && strings.TrimSpace(input.MeetingURL) == "" {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("%w: meetingUrl is required before scheduling telemedicine appointments", domain.ErrValidation)
+	}
+
+	startsAt, err := parseOptionalTime(input.StartsAt)
+	if err != nil {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("%w: startsAt must be RFC3339", domain.ErrValidation)
+	}
+	endsAt, err := parseOptionalTime(input.EndsAt)
+	if err != nil {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("%w: endsAt must be RFC3339", domain.ErrValidation)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("begin appointment create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(input)
+	if result, ok, err := idempotentResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	var appointmentID string
+	err = tx.QueryRow(ctx, `
+		insert into appointments (
+			tenant_id,
+			location_id,
+			pet_id,
+			requested_by_user_id,
+			primary_veterinarian_user_id,
+			type,
+			status,
+			starts_at,
+			ends_at,
+			reason,
+			telemedicine_url
+		)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		returning id::text
+	`,
+		tenantID,
+		input.LocationID,
+		input.PetID,
+		uuidOrNil(actorUserID),
+		uuidOrNil(input.PrimaryVeterinarianID),
+		string(input.Type),
+		string(status),
+		startsAt,
+		endsAt,
+		strings.TrimSpace(input.Reason),
+		nullString(input.MeetingURL),
+	).Scan(&appointmentID)
+	if err != nil {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("create appointment: %w", err)
+	}
+
+	if isUUID(input.PrimaryVeterinarianID) {
+		if _, err := tx.Exec(ctx, `
+			insert into appointment_veterinarians (appointment_id, veterinarian_user_id, is_primary)
+			values ($1, $2, true)
+			on conflict (appointment_id, veterinarian_user_id) do update set is_primary = excluded.is_primary
+		`, appointmentID, input.PrimaryVeterinarianID); err != nil {
+			return domain.AppointmentMutationResult{}, fmt.Errorf("assign primary veterinarian: %w", err)
+		}
+	}
+
+	for _, vetID := range input.AdditionalVeterinarianIDs {
+		if !isUUID(vetID) || vetID == input.PrimaryVeterinarianID {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into appointment_veterinarians (appointment_id, veterinarian_user_id, is_primary)
+			values ($1, $2, false)
+			on conflict (appointment_id, veterinarian_user_id) do nothing
+		`, appointmentID, vetID); err != nil {
+			return domain.AppointmentMutationResult{}, fmt.Errorf("assign additional veterinarian: %w", err)
+		}
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "appointment.create", "appointment", appointmentID, input.Reason); err != nil {
+		return domain.AppointmentMutationResult{}, err
+	}
+
+	appointment, err := appointmentByID(ctx, tx, tenantID, appointmentID)
+	if err != nil {
+		return domain.AppointmentMutationResult{}, err
+	}
+	result := domain.AppointmentMutationResult{Appointment: appointment}
+	if err := rememberIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusCreated, result); err != nil {
+		return domain.AppointmentMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("commit appointment create: %w", err)
+	}
+	return result, nil
+}
+
+func (s PostgresStore) CancelAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, appointmentID string, input domain.CancelAppointmentInput, idempotencyKey string) (domain.AppointmentMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionAppointmentManage, domain.PermissionAppointmentRequestOwn) {
+		return domain.AppointmentMutationResult{}, domain.ErrForbidden
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("begin appointment cancel: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(struct {
+		AppointmentID string
+		Input         domain.CancelAppointmentInput
+	}{AppointmentID: appointmentID, Input: input})
+	if result, ok, err := idempotentResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	var startsAt sql.NullTime
+	var status string
+	var cutoffHours int
+	err = tx.QueryRow(ctx, `
+		select
+			a.starts_at,
+			a.status::text,
+			coalesce(l.cancellation_cutoff_hours, t.default_cancellation_cutoff_hours)
+		from appointments a
+		join tenants t on t.id = a.tenant_id
+		join clinic_locations l on l.id = a.location_id and l.tenant_id = a.tenant_id
+		where a.tenant_id = $1 and a.id = $2 and a.archived_at is null
+		for update
+	`, tenantID, appointmentID).Scan(&startsAt, &status, &cutoffHours)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AppointmentMutationResult{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("read appointment cancellation policy: %w", err)
+	}
+	if status == string(domain.AppointmentCancelled) {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("%w: appointment is already cancelled", domain.ErrConflict)
+	}
+	if status == string(domain.AppointmentCompleted) {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("%w: completed appointments cannot be cancelled", domain.ErrConflict)
+	}
+
+	insideCutoff := startsAt.Valid && time.Until(startsAt.Time) < time.Duration(cutoffHours)*time.Hour
+	if insideCutoff && !roleHasAny(actorRole, domain.PermissionAppointmentManage) {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("%w: staff override is not allowed for this role", domain.ErrForbidden)
+	}
+	if insideCutoff && !input.StaffOverride {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("%w: appointment is inside the clinic cancellation cutoff", domain.ErrForbidden)
+	}
+
+	command, err := tx.Exec(ctx, `
+		update appointments
+		set status = 'cancelled',
+			cancellation_reason = $3,
+			cancelled_at = now(),
+			updated_at = now()
+		where tenant_id = $1 and id = $2 and archived_at is null
+	`, tenantID, appointmentID, strings.TrimSpace(input.Reason))
+	if err != nil {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("cancel appointment: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return domain.AppointmentMutationResult{}, domain.ErrNotFound
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "appointment.cancel", "appointment", appointmentID, input.Reason); err != nil {
+		return domain.AppointmentMutationResult{}, err
+	}
+
+	appointment, err := appointmentByID(ctx, tx, tenantID, appointmentID)
+	if err != nil {
+		return domain.AppointmentMutationResult{}, err
+	}
+	result := domain.AppointmentMutationResult{Appointment: appointment}
+	if err := rememberIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusOK, result); err != nil {
+		return domain.AppointmentMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.AppointmentMutationResult{}, fmt.Errorf("commit appointment cancel: %w", err)
+	}
+	return result, nil
 }
 
 func (s PostgresStore) Calendar(ctx context.Context, tenantID string) (map[string]any, error) {
@@ -583,4 +790,204 @@ func splitNames(value string) []string {
 		}
 	}
 	return items
+}
+
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func appointmentByID(ctx context.Context, q rowQuerier, tenantID string, appointmentID string) (domain.Appointment, error) {
+	var item domain.Appointment
+	var appointmentType, status, additional string
+	err := q.QueryRow(ctx, `
+		select
+			a.id::text,
+			p.name,
+			coalesce(g.name, ''),
+			coalesce(v.display_name, ''),
+			coalesce(av.additional_vets, ''),
+			coalesce(to_char(a.starts_at at time zone 'UTC', 'HH24:MI'), 'Unscheduled'),
+			a.type::text,
+			a.status::text,
+			coalesce(g.email, ''),
+			coalesce(a.telemedicine_url, ''),
+			coalesce(a.cancellation_reason, a.reason)
+		from appointments a
+		join pets p on p.id = a.pet_id and p.tenant_id = a.tenant_id
+		left join users v on v.id = a.primary_veterinarian_user_id
+		left join lateral (
+			select name, email
+			from pet_guardians
+			where tenant_id = a.tenant_id and pet_id = a.pet_id and archived_at is null
+			order by is_primary desc, created_at
+			limit 1
+		) g on true
+		left join lateral (
+			select string_agg(u.display_name, ', ' order by u.display_name) as additional_vets
+			from appointment_veterinarians x
+			join users u on u.id = x.veterinarian_user_id
+			where x.appointment_id = a.id and x.is_primary = false
+		) av on true
+		where a.tenant_id = $1 and a.id = $2 and a.archived_at is null
+	`, tenantID, appointmentID).Scan(
+		&item.ID,
+		&item.PetName,
+		&item.OwnerName,
+		&item.PrimaryVeterinarian,
+		&additional,
+		&item.Time,
+		&appointmentType,
+		&status,
+		&item.Contact,
+		&item.MeetingURL,
+		&item.Reason,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Appointment{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.Appointment{}, fmt.Errorf("read appointment: %w", err)
+	}
+	item.Type = domain.AppointmentType(appointmentType)
+	item.Status = domain.AppointmentStatus(status)
+	item.AdditionalVeterinarians = splitNames(additional)
+	return item, nil
+}
+
+func roleHasAny(role domain.Role, permissions ...domain.Permission) bool {
+	for _, policy := range domain.PawItRolePolicies() {
+		if policy.Role != role {
+			continue
+		}
+		for _, granted := range policy.Permissions {
+			for _, required := range permissions {
+				if granted == required {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func parseOptionalTime(value *string) (any, error) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*value))
+	if err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func mutationHash(value any) string {
+	body, _ := json.Marshal(value)
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+func idempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string) (domain.AppointmentMutationResult, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return domain.AppointmentMutationResult{}, false, nil
+	}
+
+	var existingHash string
+	var body []byte
+	err := tx.QueryRow(ctx, `
+		select request_hash, response_body
+		from idempotency_keys
+		where tenant_id = $1 and key = $2 and expires_at > now()
+	`, tenantID, key).Scan(&existingHash, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AppointmentMutationResult{}, false, nil
+	}
+	if err != nil {
+		return domain.AppointmentMutationResult{}, false, fmt.Errorf("read idempotency key: %w", err)
+	}
+	if existingHash != requestHash {
+		return domain.AppointmentMutationResult{}, true, fmt.Errorf("%w: idempotency key was already used with a different request", domain.ErrConflict)
+	}
+	var result domain.AppointmentMutationResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return domain.AppointmentMutationResult{}, false, fmt.Errorf("decode idempotent response: %w", err)
+	}
+	result.Idempotent = true
+	return result, true, nil
+}
+
+func rememberIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.AppointmentMutationResult) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode idempotent response: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		insert into idempotency_keys (tenant_id, key, request_hash, response_status, response_body)
+		values ($1, $2, $3, $4, $5)
+		on conflict (tenant_id, key) do nothing
+	`, tenantID, key, requestHash, status, body)
+	if err != nil {
+		return fmt.Errorf("record idempotency key: %w", err)
+	}
+	return nil
+}
+
+func audit(ctx context.Context, tx pgx.Tx, tenantID string, actorUserID string, actorRole domain.Role, action string, resourceType string, resourceID string, reason string) error {
+	_, err := tx.Exec(ctx, `
+		insert into audit_logs (
+			tenant_id,
+			actor_user_id,
+			actor_role,
+			action,
+			resource_type,
+			resource_id,
+			reason
+		)
+		values ($1, $2, $3, $4, $5, $6, $7)
+	`, tenantID, uuidOrNil(actorUserID), string(actorRole), action, resourceType, uuidOrNil(resourceID), nullString(reason))
+	if err != nil {
+		return fmt.Errorf("write audit log: %w", err)
+	}
+	return nil
+}
+
+func uuidOrNil(value string) any {
+	value = strings.TrimSpace(value)
+	if !isUUID(value) {
+		return nil
+	}
+	return value
+}
+
+func nullString(value string) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func isUUID(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(value) != 36 {
+		return false
+	}
+	for i, ch := range value {
+		switch i {
+		case 8, 13, 18, 23:
+			if ch != '-' {
+				return false
+			}
+		default:
+			if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+				return false
+			}
+		}
+	}
+	return true
 }
