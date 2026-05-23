@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Environment      string
 	Port             string
+	DatabaseURL      string
 	AllowedOrigins   []string
 	JWTSigningKey    string
 	AllowDevAuth     bool
@@ -23,6 +24,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		Environment:      get("PAWIT_ENV", "development"),
 		Port:             get("PORT", "8080"),
+		DatabaseURL:      os.Getenv("PAWIT_DATABASE_URL"),
 		AllowedOrigins:   csv(get("PAWIT_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173")),
 		JWTSigningKey:    os.Getenv("PAWIT_JWT_SIGNING_KEY"),
 		AllowDevAuth:     boolEnv("PAWIT_ALLOW_DEV_AUTH", true),
@@ -36,6 +38,9 @@ func Load() (Config, error) {
 		}
 		if cfg.AllowDevAuth {
 			return Config{}, errors.New("PAWIT_ALLOW_DEV_AUTH must be false in production")
+		}
+		if cfg.DatabaseURL == "" {
+			return Config{}, errors.New("PAWIT_DATABASE_URL is required in production")
 		}
 	}
 

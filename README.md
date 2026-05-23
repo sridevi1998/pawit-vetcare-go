@@ -32,6 +32,7 @@ Required:
 - `PAWIT_ENV=production`
 - `PAWIT_ALLOW_DEV_AUTH=false`
 - `PAWIT_JWT_SIGNING_KEY` from Google Secret Manager
+- `PAWIT_DATABASE_URL` from Google Secret Manager
 - `PAWIT_ALLOWED_ORIGINS` with the deployed frontend origins
 
 ## Target Platform
@@ -48,3 +49,5 @@ Required:
 See [docs/architecture.md](docs/architecture.md) and [docs/github-access.md](docs/github-access.md).
 
 The current API surface is summarized in [docs/api-contract.md](docs/api-contract.md).
+
+The database foundation is summarized in [docs/database/schema.md](docs/database/schema.md).
