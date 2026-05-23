@@ -57,3 +57,28 @@ func TestInvalidMigrationDirectionFails(t *testing.T) {
 		t.Fatal("expected invalid migration direction to fail")
 	}
 }
+
+func TestMigrationVersionAndChecksum(t *testing.T) {
+	migration := Migration{Name: "0001_pawit_core_schema.up.sql", SQL: "select 1;"}
+
+	if migration.Version() != "0001_pawit_core_schema" {
+		t.Fatalf("unexpected version %q", migration.Version())
+	}
+	if migration.Checksum() == "" {
+		t.Fatal("expected checksum")
+	}
+}
+
+func TestSplitSQLStatements(t *testing.T) {
+	statements := splitSQLStatements("select 'a;b'; select 'it''s ok';")
+
+	if len(statements) != 2 {
+		t.Fatalf("expected 2 statements, got %d: %#v", len(statements), statements)
+	}
+	if statements[0] != "select 'a;b'" {
+		t.Fatalf("unexpected first statement %q", statements[0])
+	}
+	if statements[1] != "select 'it''s ok'" {
+		t.Fatalf("unexpected second statement %q", statements[1])
+	}
+}

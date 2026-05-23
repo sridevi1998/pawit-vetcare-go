@@ -23,6 +23,19 @@ Migration files live in:
 
 The Go package `internal/database` embeds migrations so the future deploy/migration job can load them in order.
 
+Run migrations with:
+
+```sh
+PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=disable go run ./cmd/migrate up
+```
+
+The container image includes both binaries:
+
+- `/app/pawit-api`
+- `/app/pawit-migrate`
+
+The Cloud Run migration job manifest is in `deployments/cloud-run/migration-job.yaml`.
+
 ## Core Tables
 
 - `tenants`
@@ -54,4 +67,4 @@ The Go package `internal/database` embeds migrations so the future deploy/migrat
 
 ## Next Persistence Step
 
-Add a migration runner and PostgreSQL repository implementations using `pgx` and tenant-scoped query helpers.
+Add PostgreSQL repository implementations using `pgx` and tenant-scoped query helpers.

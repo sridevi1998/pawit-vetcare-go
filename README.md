@@ -51,3 +51,12 @@ See [docs/architecture.md](docs/architecture.md) and [docs/github-access.md](doc
 The current API surface is summarized in [docs/api-contract.md](docs/api-contract.md).
 
 The database foundation is summarized in [docs/database/schema.md](docs/database/schema.md).
+
+## Database Migrations
+
+```sh
+PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=disable go run ./cmd/migrate status
+PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=disable go run ./cmd/migrate up
+```
+
+The production container includes `/app/pawit-migrate` for Cloud Run migration jobs.
