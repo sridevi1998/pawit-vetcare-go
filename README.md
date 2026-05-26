@@ -52,7 +52,7 @@ Required:
 
 See [docs/architecture.md](docs/architecture.md) and [docs/github-access.md](docs/github-access.md).
 
-The current API surface is summarized in [docs/api-contract.md](docs/api-contract.md).
+The current API surface is summarized in [docs/api-contract.md](docs/api-contract.md). The frontend-facing OpenAPI source of truth lives in the sibling `pawit-vetcare-contracts` repo at `openapi/pawit.v1.yaml`.
 
 The database foundation is summarized in [docs/database/schema.md](docs/database/schema.md).
 

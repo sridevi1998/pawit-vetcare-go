@@ -2,6 +2,11 @@
 
 Base path: `/api/v1`
 
+The formal OpenAPI contract lives in the sibling `pawit-vetcare-contracts` repo:
+
+- `openapi/pawit.v1.yaml`
+- Generated TypeScript types: `src/pawit-api.ts`
+
 All application endpoints require:
 
 - A valid `pawit_access` cookie or `Authorization: Bearer <jwt>`
@@ -43,7 +48,6 @@ All application endpoints require:
 
 ## Next Contract Slice
 
-- Add OpenAPI 3.1 spec in `pawit-vetcare-contracts`
 - Generate frontend TypeScript clients from OpenAPI
 - Expand PostgreSQL repositories with create/update workflows for invoices, lab reports, staff, prescriptions, and documents
 - Add idempotency-key support to the remaining mutation endpoints
