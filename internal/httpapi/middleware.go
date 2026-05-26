@@ -1,0 +1,155 @@
+package httpapi
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"log/slog"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+)
+
+type rateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]bucket
+	limit   int
+	window  time.Duration
+}
+
+type bucket struct {
+	count     int
+	expiresAt time.Time
+}
+
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	return &rateLimiter{buckets: map[string]bucket{}, limit: limit, window: window}
+}
+
+func (r *rateLimiter) allow(key string) bool {
+	now := time.Now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	current := r.buckets[key]
+	if current.expiresAt.Before(now) {
+		current = bucket{expiresAt: now.Add(r.window)}
+	}
+	current.count++
+	r.buckets[key] = current
+
+	return current.count <= r.limit
+}
+
+func (s *Server) middleware(next http.Handler) http.Handler {
+	return s.recoverer(s.securityHeaders(s.cors(s.requestSizeLimit(s.rateLimit(s.authenticate(next))))))
+}
+
+func (s *Server) recoverer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				slog.Error("panic recovered", "requestId", requestID(r), "error", err)
+				writeError(w, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+			}
+		}()
+		next.ServeHTTP(w, withRequestID(r))
+	})
+}
+
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+		if s.cfg.IsProduction() {
+			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if s.originAllowed(origin) {
+			h := w.Header()
+			h.Set("Access-Control-Allow-Origin", origin)
+			h.Set("Access-Control-Allow-Credentials", "true")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-PawIt-Tenant-ID, X-PawIt-User-ID, X-PawIt-Role, X-Request-ID")
+			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			h.Set("Vary", "Origin")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) originAllowed(origin string) bool {
+	if origin == "" {
+		return false
+	}
+	for _, allowed := range s.cfg.AllowedOrigins {
+		if origin == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) requestSizeLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, s.cfg.RequestBodyLimit)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) rateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := clientIP(r)
+		if !s.limiter.allow(key) {
+			writeError(w, http.StatusTooManyRequests, "rate_limited", "Too many requests. Please retry shortly.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func clientIP(r *http.Request) string {
+	for _, header := range []string{"X-Forwarded-For", "X-Real-IP"} {
+		value := strings.TrimSpace(r.Header.Get(header))
+		if value != "" {
+			parts := strings.Split(value, ",")
+			return strings.TrimSpace(parts[0])
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func withRequestID(r *http.Request) *http.Request {
+	id := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+	if id == "" {
+		id = randomID()
+	}
+	return r.WithContext(withRequestIDContext(r.Context(), id))
+}
+
+func randomID() string {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return time.Now().UTC().Format("20060102150405.000000000")
+	}
+	return hex.EncodeToString(bytes[:])
+}

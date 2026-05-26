@@ -1,0 +1,39 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: pawit-vetcare-migrate
+  annotations:
+    run.googleapis.com/launch-stage: GA
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/vpc-access-egress: private-ranges-only
+    spec:
+      taskCount: 1
+      template:
+        spec:
+          maxRetries: 0
+          timeoutSeconds: 600
+          containers:
+            - image: asia-south1-docker.pkg.dev/PROJECT_ID/pawit/pawit-vetcare-api:COMMIT_SHA
+              command:
+                - /app/pawit-migrate
+              args:
+                - up
+              env:
+                - name: PAWIT_ENV
+                  value: production
+                - name: PAWIT_ALLOW_DEV_AUTH
+                  value: "false"
+                - name: PAWIT_JWT_SIGNING_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: pawit-jwt-signing-key
+                      key: latest
+                - name: PAWIT_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: pawit-database-url
+                      key: latest
