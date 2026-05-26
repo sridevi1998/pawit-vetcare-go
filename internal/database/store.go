@@ -647,6 +647,226 @@ func (s PostgresStore) Patients(ctx context.Context, tenantID string) ([]domain.
 	return items, nil
 }
 
+func (s PostgresStore) CreatePet(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreatePetInput, idempotencyKey string) (domain.PetMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionPetRecordManage, domain.PermissionPetRecordManageOwn) {
+		return domain.PetMutationResult{}, domain.ErrForbidden
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.PetMutationResult{}, fmt.Errorf("begin pet create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(input)
+	if result, ok, err := idempotentPetResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	var petID string
+	err = tx.QueryRow(ctx, `
+		insert into pets (
+			tenant_id,
+			primary_location_id,
+			name,
+			species,
+			breed,
+			sex,
+			estimated_age
+		)
+		values ($1, $2, $3, $4, $5, $6, $7)
+		returning id::text
+	`,
+		tenantID,
+		input.LocationID,
+		strings.TrimSpace(input.Name),
+		string(input.Species),
+		nullString(input.Breed),
+		nullString(input.Sex),
+		nullString(input.EstimatedAge),
+	).Scan(&petID)
+	if err != nil {
+		return domain.PetMutationResult{}, fmt.Errorf("create pet: %w", err)
+	}
+
+	relationship := strings.TrimSpace(input.Relationship)
+	if relationship == "" {
+		relationship = "guardian"
+	}
+	isPrimary := input.PrimaryGuardian
+	if !isPrimary {
+		isPrimary = true
+	}
+	var guardianUserID any
+	if actorRole == domain.RolePetParent {
+		guardianUserID = uuidOrNil(actorUserID)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		insert into pet_guardians (
+			tenant_id,
+			pet_id,
+			user_id,
+			name,
+			email,
+			relationship,
+			is_primary
+		)
+		values ($1, $2, $3, $4, $5, $6, $7)
+	`,
+		tenantID,
+		petID,
+		guardianUserID,
+		strings.TrimSpace(input.GuardianName),
+		nullString(input.GuardianEmail),
+		relationship,
+		isPrimary,
+	); err != nil {
+		return domain.PetMutationResult{}, fmt.Errorf("create pet guardian: %w", err)
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "pet.create", "pet", petID, input.Name); err != nil {
+		return domain.PetMutationResult{}, err
+	}
+
+	pet, err := patientByID(ctx, tx, tenantID, petID)
+	if err != nil {
+		return domain.PetMutationResult{}, err
+	}
+	result := domain.PetMutationResult{Pet: pet}
+	if err := rememberPetIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusCreated, result); err != nil {
+		return domain.PetMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.PetMutationResult{}, fmt.Errorf("commit pet create: %w", err)
+	}
+	return result, nil
+}
+
+func (s PostgresStore) ArchivePet(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, input domain.ArchivePetInput, idempotencyKey string) (domain.PetMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionPetRecordManage) {
+		return domain.PetMutationResult{}, domain.ErrForbidden
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.PetMutationResult{}, fmt.Errorf("begin pet archive: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(struct {
+		PetID string
+		Input domain.ArchivePetInput
+	}{PetID: petID, Input: input})
+	if result, ok, err := idempotentPetResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	pet, err := patientByID(ctx, tx, tenantID, petID)
+	if err != nil {
+		return domain.PetMutationResult{}, err
+	}
+
+	command, err := tx.Exec(ctx, `
+		update pets
+		set status = 'archived',
+			archived_at = now(),
+			updated_at = now()
+		where tenant_id = $1 and id = $2 and archived_at is null
+	`, tenantID, petID)
+	if err != nil {
+		return domain.PetMutationResult{}, fmt.Errorf("archive pet: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return domain.PetMutationResult{}, domain.ErrNotFound
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "pet.archive", "pet", petID, input.Reason); err != nil {
+		return domain.PetMutationResult{}, err
+	}
+
+	result := domain.PetMutationResult{Pet: pet}
+	if err := rememberPetIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusOK, result); err != nil {
+		return domain.PetMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.PetMutationResult{}, fmt.Errorf("commit pet archive: %w", err)
+	}
+	return result, nil
+}
+
+func (s PostgresStore) UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, input domain.UploadPetDocumentInput, idempotencyKey string) (domain.PetDocumentMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionPetDocumentUpload) {
+		return domain.PetDocumentMutationResult{}, domain.ErrForbidden
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.PetDocumentMutationResult{}, fmt.Errorf("begin pet document upload: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(struct {
+		PetID string
+		Input domain.UploadPetDocumentInput
+	}{PetID: petID, Input: input})
+	if result, ok, err := idempotentPetDocumentResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	if _, err := patientByID(ctx, tx, tenantID, petID); err != nil {
+		return domain.PetDocumentMutationResult{}, err
+	}
+
+	var documentID string
+	err = tx.QueryRow(ctx, `
+		insert into pet_documents (
+			tenant_id,
+			pet_id,
+			uploaded_by_user_id,
+			title,
+			document_type,
+			object_path,
+			content_type,
+			size_bytes
+		)
+		values ($1, $2, $3, $4, $5, $6, $7, $8)
+		returning id::text
+	`,
+		tenantID,
+		petID,
+		uuidOrNil(actorUserID),
+		strings.TrimSpace(input.Title),
+		strings.TrimSpace(input.DocumentType),
+		strings.TrimSpace(input.ObjectPath),
+		strings.TrimSpace(input.ContentType),
+		input.SizeBytes,
+	).Scan(&documentID)
+	if err != nil {
+		return domain.PetDocumentMutationResult{}, fmt.Errorf("create pet document: %w", err)
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "pet_document.upload", "pet_document", documentID, input.Title); err != nil {
+		return domain.PetDocumentMutationResult{}, err
+	}
+
+	document, err := petDocumentByID(ctx, tx, tenantID, documentID)
+	if err != nil {
+		return domain.PetDocumentMutationResult{}, err
+	}
+	result := domain.PetDocumentMutationResult{Document: document}
+	if err := rememberPetDocumentIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusCreated, result); err != nil {
+		return domain.PetDocumentMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.PetDocumentMutationResult{}, fmt.Errorf("commit pet document upload: %w", err)
+	}
+	return result, nil
+}
+
 func (s PostgresStore) PrescriptionTemplates(ctx context.Context, tenantID string) ([]domain.PrescriptionTemplate, error) {
 	return s.demo.PrescriptionTemplates(ctx, tenantID)
 }
@@ -1076,6 +1296,72 @@ func queueEntryByID(ctx context.Context, q rowQuerier, tenantID string, queueID 
 	return item, nil
 }
 
+func patientByID(ctx context.Context, q rowQuerier, tenantID string, petID string) (domain.PatientRecord, error) {
+	var item domain.PatientRecord
+	err := q.QueryRow(ctx, `
+		select
+			p.id::text,
+			p.name,
+			coalesce(g.name, ''),
+			p.species::text,
+			coalesce(p.breed, ''),
+			coalesce(p.estimated_age, ''),
+			coalesce(p.sex, ''),
+			coalesce(g.email, ''),
+			coalesce(to_char(v.last_visit at time zone 'UTC', 'YYYY-MM-DD'), 'No visits'),
+			(select count(*) from pet_guardians pg where pg.tenant_id = p.tenant_id and pg.pet_id = p.id and pg.archived_at is null)::int,
+			(select count(*) from pet_documents pd where pd.tenant_id = p.tenant_id and pd.pet_id = p.id and pd.archived_at is null)::int
+		from pets p
+		left join lateral (
+			select name, email
+			from pet_guardians
+			where tenant_id = p.tenant_id and pet_id = p.id and archived_at is null
+			order by is_primary desc, created_at
+			limit 1
+		) g on true
+		left join lateral (
+			select max(starts_at) as last_visit
+			from appointments
+			where tenant_id = p.tenant_id and pet_id = p.id and status = 'completed'
+		) v on true
+		where p.tenant_id = $1 and p.id = $2 and p.archived_at is null
+	`, tenantID, petID).Scan(&item.ID, &item.PetName, &item.OwnerName, &item.Species, &item.Breed, &item.Age, &item.Sex, &item.Phone, &item.LastVisit, &item.GuardianCount, &item.DocumentsCount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.PatientRecord{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.PatientRecord{}, fmt.Errorf("read pet record: %w", err)
+	}
+	return item, nil
+}
+
+func petDocumentByID(ctx context.Context, q rowQuerier, tenantID string, documentID string) (domain.PetDocument, error) {
+	var item domain.PetDocument
+	var createdAt time.Time
+	err := q.QueryRow(ctx, `
+		select
+			id::text,
+			pet_id::text,
+			title,
+			document_type,
+			object_path,
+			content_type,
+			size_bytes,
+			status::text,
+			created_at
+		from pet_documents
+		where tenant_id = $1 and id = $2 and archived_at is null
+	`, tenantID, documentID).Scan(&item.ID, &item.PetID, &item.Title, &item.DocumentType, &item.ObjectPath, &item.ContentType, &item.SizeBytes, &item.Status, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.PetDocument{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.PetDocument{}, fmt.Errorf("read pet document: %w", err)
+	}
+	item.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	return item, nil
+}
+
 func roleHasAny(role domain.Role, permissions ...domain.Permission) bool {
 	for _, policy := range domain.PawItRolePolicies() {
 		if policy.Role != role {
@@ -1226,6 +1512,66 @@ func idempotentQueueResult(ctx context.Context, tx pgx.Tx, tenantID string, key 
 	return result, true, nil
 }
 
+func idempotentPetResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string) (domain.PetMutationResult, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return domain.PetMutationResult{}, false, nil
+	}
+
+	var existingHash string
+	var body []byte
+	err := tx.QueryRow(ctx, `
+		select request_hash, response_body
+		from idempotency_keys
+		where tenant_id = $1 and key = $2 and expires_at > now()
+	`, tenantID, key).Scan(&existingHash, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.PetMutationResult{}, false, nil
+	}
+	if err != nil {
+		return domain.PetMutationResult{}, false, fmt.Errorf("read idempotency key: %w", err)
+	}
+	if existingHash != requestHash {
+		return domain.PetMutationResult{}, true, fmt.Errorf("%w: idempotency key was already used with a different request", domain.ErrConflict)
+	}
+	var result domain.PetMutationResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return domain.PetMutationResult{}, false, fmt.Errorf("decode idempotent response: %w", err)
+	}
+	result.Idempotent = true
+	return result, true, nil
+}
+
+func idempotentPetDocumentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string) (domain.PetDocumentMutationResult, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return domain.PetDocumentMutationResult{}, false, nil
+	}
+
+	var existingHash string
+	var body []byte
+	err := tx.QueryRow(ctx, `
+		select request_hash, response_body
+		from idempotency_keys
+		where tenant_id = $1 and key = $2 and expires_at > now()
+	`, tenantID, key).Scan(&existingHash, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.PetDocumentMutationResult{}, false, nil
+	}
+	if err != nil {
+		return domain.PetDocumentMutationResult{}, false, fmt.Errorf("read idempotency key: %w", err)
+	}
+	if existingHash != requestHash {
+		return domain.PetDocumentMutationResult{}, true, fmt.Errorf("%w: idempotency key was already used with a different request", domain.ErrConflict)
+	}
+	var result domain.PetDocumentMutationResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return domain.PetDocumentMutationResult{}, false, fmt.Errorf("decode idempotent response: %w", err)
+	}
+	result.Idempotent = true
+	return result, true, nil
+}
+
 func rememberIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.AppointmentMutationResult) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -1247,6 +1593,46 @@ func rememberIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, k
 }
 
 func rememberQueueIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.QueueMutationResult) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode idempotent response: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		insert into idempotency_keys (tenant_id, key, request_hash, response_status, response_body)
+		values ($1, $2, $3, $4, $5)
+		on conflict (tenant_id, key) do nothing
+	`, tenantID, key, requestHash, status, body)
+	if err != nil {
+		return fmt.Errorf("record idempotency key: %w", err)
+	}
+	return nil
+}
+
+func rememberPetIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.PetMutationResult) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode idempotent response: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		insert into idempotency_keys (tenant_id, key, request_hash, response_status, response_body)
+		values ($1, $2, $3, $4, $5)
+		on conflict (tenant_id, key) do nothing
+	`, tenantID, key, requestHash, status, body)
+	if err != nil {
+		return fmt.Errorf("record idempotency key: %w", err)
+	}
+	return nil
+}
+
+func rememberPetDocumentIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.PetDocumentMutationResult) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil

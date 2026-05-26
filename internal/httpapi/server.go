@@ -50,6 +50,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/queue/{id}/complete", s.completeQueueEntry)
 	s.mux.HandleFunc("POST /api/v1/queue/{id}/cancel", s.cancelQueueEntry)
 	s.mux.HandleFunc("GET /api/v1/pets", s.patients)
+	s.mux.HandleFunc("POST /api/v1/pets", s.createPet)
+	s.mux.HandleFunc("POST /api/v1/pets/{id}/archive", s.archivePet)
+	s.mux.HandleFunc("POST /api/v1/pets/{id}/documents", s.uploadPetDocument)
 	s.mux.HandleFunc("GET /api/v1/patients", s.patients)
 	s.mux.HandleFunc("GET /api/v1/prescription-templates", s.prescriptionTemplates)
 	s.mux.HandleFunc("GET /api/v1/clinical-notes", s.clinicalNotes)
@@ -248,6 +251,81 @@ func (s *Server) patients(w http.ResponseWriter, r *http.Request) {
 	writeData(w, map[string]any{"items": items}, err)
 }
 
+func (s *Server) createPet(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionPetRecordManage, domain.PermissionPetRecordManageOwn) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot create pet records.")
+		return
+	}
+
+	var input domain.CreatePetInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateCreatePet(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.CreatePet(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
+	writeMutation(w, http.StatusCreated, result, err)
+}
+
+func (s *Server) archivePet(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionPetRecordManage) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot archive pet records.")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Pet ID is required.")
+		return
+	}
+
+	var input domain.ArchivePetInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if strings.TrimSpace(input.Reason) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Archive reason is required.")
+		return
+	}
+
+	result, err := s.store.ArchivePet(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), id, input, idempotencyKey(r))
+	writeMutation(w, http.StatusOK, result, err)
+}
+
+func (s *Server) uploadPetDocument(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionPetDocumentUpload) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot upload pet documents.")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Pet ID is required.")
+		return
+	}
+
+	var input domain.UploadPetDocumentInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateUploadPetDocument(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.UploadPetDocument(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), id, input, idempotencyKey(r))
+	writeMutation(w, http.StatusCreated, result, err)
+}
+
 func (s *Server) prescriptionTemplates(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
 	items, err := s.store.PrescriptionTemplates(r.Context(), auth.TenantID)
@@ -383,8 +461,52 @@ func validateRegisterWalkIn(input domain.RegisterWalkInInput) error {
 	return nil
 }
 
+func validateCreatePet(input domain.CreatePetInput) error {
+	if strings.TrimSpace(input.LocationID) == "" {
+		return errors.New("locationId is required")
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return errors.New("name is required")
+	}
+	if !validSpecies(input.Species) {
+		return errors.New("species must be dog or cat")
+	}
+	if strings.TrimSpace(input.GuardianName) == "" {
+		return errors.New("guardianName is required")
+	}
+	return nil
+}
+
+func validateUploadPetDocument(input domain.UploadPetDocumentInput) error {
+	if strings.TrimSpace(input.Title) == "" {
+		return errors.New("title is required")
+	}
+	if strings.TrimSpace(input.DocumentType) == "" {
+		return errors.New("documentType is required")
+	}
+	if strings.TrimSpace(input.ObjectPath) == "" {
+		return errors.New("objectPath is required")
+	}
+	if strings.TrimSpace(input.ContentType) == "" {
+		return errors.New("contentType is required")
+	}
+	if input.SizeBytes < 0 {
+		return errors.New("sizeBytes must be greater than or equal to 0")
+	}
+	return nil
+}
+
 func validAppointmentType(value domain.AppointmentType) bool {
 	for _, item := range domain.PawItProductSpec().SupportedAppointmentTypes {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+func validSpecies(value domain.Species) bool {
+	for _, item := range domain.PawItProductSpec().SupportedSpecies {
 		if item == value {
 			return true
 		}

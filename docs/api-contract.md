@@ -28,6 +28,9 @@ All application endpoints require:
 | `POST` | `/queue/{id}/complete` | Complete a queue entry and linked appointment |
 | `POST` | `/queue/{id}/cancel` | Cancel a queue entry and linked appointment |
 | `GET` | `/pets` | Pet and pet-parent records |
+| `POST` | `/pets` | Create a dog/cat pet record with first guardian |
+| `POST` | `/pets/{id}/archive` | Archive a pet record with audit reason |
+| `POST` | `/pets/{id}/documents` | Register uploaded pet document metadata |
 | `GET` | `/patients` | Pet and pet-parent records |
 | `GET` | `/prescription-templates` | Veterinary prescription templates |
 | `GET` | `/clinical-notes` | SOAP notes and consultations |

@@ -16,6 +16,9 @@ type Store interface {
 	RegisterWalkIn(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input RegisterWalkInInput, idempotencyKey string) (QueueMutationResult, error)
 	UpdateQueueStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, queueID string, status QueueStatus, input UpdateQueueInput, idempotencyKey string) (QueueMutationResult, error)
 	Patients(ctx context.Context, tenantID string) ([]PatientRecord, error)
+	CreatePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreatePetInput, idempotencyKey string) (PetMutationResult, error)
+	ArchivePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input ArchivePetInput, idempotencyKey string) (PetMutationResult, error)
+	UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input UploadPetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error)
 	PrescriptionTemplates(ctx context.Context, tenantID string) ([]PrescriptionTemplate, error)
 	ClinicalNotes(ctx context.Context, tenantID string) ([]ClinicalNote, error)
 	LabTests(ctx context.Context, tenantID string) ([]LabTest, error)
@@ -186,6 +189,38 @@ func (DemoStore) Patients(ctx context.Context, tenantID string) ([]PatientRecord
 		{ID: "pet_001", PetName: "Milo", OwnerName: "Avery Parker", Species: string(SpeciesCat), Breed: "Domestic Shorthair", Age: "3y", Sex: "Male", Phone: "+13125550110", LastVisit: "2026-05-01", VaccinesDue: 1, OpenPlans: 0, GuardianCount: 2, DocumentsCount: 3},
 		{ID: "pet_002", PetName: "Bruno", OwnerName: "Jordan Ellis", Species: string(SpeciesDog), Breed: "Labrador Retriever", Age: "5y", Sex: "Male", Phone: "+14155550192", LastVisit: "No visits", VaccinesDue: 0, OpenPlans: 1, GuardianCount: 1, DocumentsCount: 1},
 	}, nil
+}
+
+func (DemoStore) CreatePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreatePetInput, idempotencyKey string) (PetMutationResult, error) {
+	return PetMutationResult{Pet: PatientRecord{
+		ID:            "pet_demo_created",
+		PetName:       input.Name,
+		OwnerName:     input.GuardianName,
+		Species:       string(input.Species),
+		Breed:         input.Breed,
+		Age:           input.EstimatedAge,
+		Sex:           input.Sex,
+		Phone:         input.GuardianEmail,
+		LastVisit:     "No visits",
+		GuardianCount: 1,
+	}}, nil
+}
+
+func (DemoStore) ArchivePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input ArchivePetInput, idempotencyKey string) (PetMutationResult, error) {
+	return PetMutationResult{Pet: PatientRecord{ID: petID, PetName: "Archived Demo Pet"}}, nil
+}
+
+func (DemoStore) UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input UploadPetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error) {
+	return PetDocumentMutationResult{Document: PetDocument{
+		ID:           "doc_demo_created",
+		PetID:        petID,
+		Title:        input.Title,
+		DocumentType: input.DocumentType,
+		ObjectPath:   input.ObjectPath,
+		ContentType:  input.ContentType,
+		SizeBytes:    input.SizeBytes,
+		Status:       "active",
+	}}, nil
 }
 
 func (DemoStore) PrescriptionTemplates(ctx context.Context, tenantID string) ([]PrescriptionTemplate, error) {

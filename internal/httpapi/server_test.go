@@ -66,6 +66,94 @@ func TestPetsEndpointAliasesPetRecords(t *testing.T) {
 	}
 }
 
+func TestCreatePetAllowsPetParent(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{
+		"locationId": "loc_001",
+		"name": "Nala",
+		"species": "cat",
+		"breed": "Domestic Shorthair",
+		"guardianName": "Avery Parker",
+		"guardianEmail": "avery@example.com"
+	}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/pets", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RolePetParent))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, response.Code, response.Body.String())
+	}
+
+	var payload domain.PetMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Pet.PetName != "Nala" {
+		t.Fatalf("expected created pet name, got %q", payload.Pet.PetName)
+	}
+}
+
+func TestCreatePetRejectsUnsupportedSpecies(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"locationId":"loc_001","name":"Kiwi","species":"bird","guardianName":"Avery Parker"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/pets", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
+	}
+}
+
+func TestArchivePetRequiresStaffRecordPermission(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/pets/pet_001/archive", strings.NewReader(`{"reason":"duplicate record"}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RolePetParent))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
+func TestUploadPetDocumentAllowsReceptionist(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{
+		"title": "Rabies certificate",
+		"documentType": "vaccine_history",
+		"objectPath": "tenant_test/pets/pet_001/rabies.pdf",
+		"contentType": "application/pdf",
+		"sizeBytes": 1024
+	}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/pets/pet_001/documents", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, response.Code, response.Body.String())
+	}
+
+	var payload domain.PetDocumentMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Document.DocumentType != "vaccine_history" {
+		t.Fatalf("expected vaccine_history document, got %q", payload.Document.DocumentType)
+	}
+}
+
 func TestProductSpecMatchesApprovedV1Scope(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/product-spec", nil)

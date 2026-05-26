@@ -97,6 +97,53 @@ type PatientRecord struct {
 	DocumentsCount int    `json:"documentsCount"`
 }
 
+type CreatePetInput struct {
+	LocationID      string  `json:"locationId"`
+	Name            string  `json:"name"`
+	Species         Species `json:"species"`
+	Breed           string  `json:"breed,omitempty"`
+	Sex             string  `json:"sex,omitempty"`
+	EstimatedAge    string  `json:"estimatedAge,omitempty"`
+	GuardianName    string  `json:"guardianName"`
+	GuardianEmail   string  `json:"guardianEmail,omitempty"`
+	Relationship    string  `json:"relationship,omitempty"`
+	PrimaryGuardian bool    `json:"primaryGuardian,omitempty"`
+}
+
+type ArchivePetInput struct {
+	Reason string `json:"reason"`
+}
+
+type PetMutationResult struct {
+	Pet        PatientRecord `json:"pet"`
+	Idempotent bool          `json:"idempotent,omitempty"`
+}
+
+type PetDocument struct {
+	ID           string `json:"id"`
+	PetID        string `json:"petId"`
+	Title        string `json:"title"`
+	DocumentType string `json:"documentType"`
+	ObjectPath   string `json:"objectPath"`
+	ContentType  string `json:"contentType"`
+	SizeBytes    int64  `json:"sizeBytes"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"createdAt"`
+}
+
+type UploadPetDocumentInput struct {
+	Title        string `json:"title"`
+	DocumentType string `json:"documentType"`
+	ObjectPath   string `json:"objectPath"`
+	ContentType  string `json:"contentType"`
+	SizeBytes    int64  `json:"sizeBytes"`
+}
+
+type PetDocumentMutationResult struct {
+	Document   PetDocument `json:"document"`
+	Idempotent bool        `json:"idempotent,omitempty"`
+}
+
 type PrescriptionTemplate struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
