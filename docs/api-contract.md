@@ -40,6 +40,9 @@ All application endpoints require:
 | `GET` | `/prescription-templates` | Veterinary prescription templates |
 | `GET` | `/clinical-notes` | SOAP notes and consultations |
 | `GET` | `/lab-tests` | Diagnostics and reports |
+| `POST` | `/lab-tests` | Create an internal or external lab order |
+| `POST` | `/lab-tests/{id}/status` | Process a lab order through sample/result statuses |
+| `POST` | `/lab-tests/{id}/report` | Upload lab result metadata and optionally share it |
 | `GET` | `/billing` | Billing metrics and invoices |
 | `GET` | `/analytics` | Demographics, appointments, revenue, diagnoses |
 | `GET` | `/feedback` | Reviews and rating distribution |
@@ -49,6 +52,6 @@ All application endpoints require:
 ## Next Contract Slice
 
 - Generate frontend TypeScript clients from OpenAPI
-- Expand PostgreSQL repositories with create/update workflows for invoices, lab reports, staff, prescriptions, and documents
+- Expand PostgreSQL repositories with create/update workflows for invoices, staff, prescriptions, and remaining documents
 - Add idempotency-key support to the remaining mutation endpoints
 - Add shared contract tests for API responses used by the hospital portal

@@ -22,6 +22,9 @@ type Store interface {
 	PrescriptionTemplates(ctx context.Context, tenantID string) ([]PrescriptionTemplate, error)
 	ClinicalNotes(ctx context.Context, tenantID string) ([]ClinicalNote, error)
 	LabTests(ctx context.Context, tenantID string) ([]LabTest, error)
+	CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateLabOrderInput, idempotencyKey string) (LabOrderMutationResult, error)
+	UpdateLabOrderStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UpdateLabOrderStatusInput, idempotencyKey string) (LabOrderMutationResult, error)
+	UploadLabResult(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UploadLabResultInput, idempotencyKey string) (LabOrderMutationResult, error)
 	Billing(ctx context.Context, tenantID string) (map[string]any, error)
 	Analytics(ctx context.Context, tenantID string) (Analytics, error)
 	Feedback(ctx context.Context, tenantID string) (map[string]any, error)
@@ -240,6 +243,48 @@ func (DemoStore) LabTests(ctx context.Context, tenantID string) ([]LabTest, erro
 	return []LabTest{
 		{ID: "lab_001", PetName: "Bruno", OwnerName: "Jordan Ellis", TestType: "Skin scraping", LabCenter: "Northside Veterinary Lab", LabType: "external", Status: LabSentOut, SharedWithPetParent: false},
 	}, nil
+}
+
+func (DemoStore) CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateLabOrderInput, idempotencyKey string) (LabOrderMutationResult, error) {
+	return LabOrderMutationResult{LabTest: LabTest{
+		ID:        "lab_demo_created",
+		PetName:   "Demo Pet",
+		OwnerName: "Demo Guardian",
+		TestType:  input.TestType,
+		LabCenter: "Internal lab",
+		LabType:   "internal",
+		Status:    LabOrdered,
+	}}, nil
+}
+
+func (DemoStore) UpdateLabOrderStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UpdateLabOrderStatusInput, idempotencyKey string) (LabOrderMutationResult, error) {
+	return LabOrderMutationResult{LabTest: LabTest{
+		ID:        labOrderID,
+		PetName:   "Demo Pet",
+		OwnerName: "Demo Guardian",
+		TestType:  "Demo lab test",
+		LabCenter: "Internal lab",
+		LabType:   "internal",
+		Status:    input.Status,
+	}}, nil
+}
+
+func (DemoStore) UploadLabResult(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UploadLabResultInput, idempotencyKey string) (LabOrderMutationResult, error) {
+	status := LabInProgress
+	if input.MarkOrderCompleted {
+		status = LabCompleted
+	}
+	return LabOrderMutationResult{LabTest: LabTest{
+		ID:                  labOrderID,
+		PetName:             "Demo Pet",
+		OwnerName:           "Demo Guardian",
+		TestType:            "Demo lab test",
+		LabCenter:           "Internal lab",
+		LabType:             "internal",
+		Status:              status,
+		ReportURL:           input.ReportObjectPath,
+		SharedWithPetParent: input.ShareWithPetParent,
+	}}, nil
 }
 
 func (DemoStore) Billing(ctx context.Context, tenantID string) (map[string]any, error) {
