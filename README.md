@@ -56,7 +56,7 @@ See [docs/architecture.md](docs/architecture.md) and [docs/github-access.md](doc
 
 The current API surface is summarized in [docs/api-contract.md](docs/api-contract.md). The frontend-facing OpenAPI source of truth lives in the sibling `pawit-vetcare-contracts` repo at `openapi/pawit.v1.yaml`.
 
-The database foundation is summarized in [docs/database/schema.md](docs/database/schema.md).
+The database foundation is summarized in [docs/database/schema.md](docs/database/schema.md). The database decision record is in [docs/database/postgres-decision.md](docs/database/postgres-decision.md).
 
 ## Database Migrations
 
@@ -68,3 +68,9 @@ PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=
 The production container includes `/app/pawit-migrate` for Cloud Run migration jobs.
 
 When `PAWIT_DATABASE_URL` is set, the API uses PostgreSQL for tenant-scoped reads. Without it, local development uses the in-memory demo store so frontend screens can be built before a database is running.
+
+## Database Direction
+
+PawIt VetCare is PostgreSQL-first. PostgreSQL is the source of truth for tenants, users, RBAC, pets, appointments, clinical records, labs, billing, payments, audit logs, and idempotent mutations.
+
+Use relational tables for core business records and `jsonb` only for flexible metadata such as tenant settings, vitals payloads, and integration-specific data. MongoDB is not planned for the core transactional database because the product depends on strong relationships, constraints, transactions, and tenant-scoped reporting.

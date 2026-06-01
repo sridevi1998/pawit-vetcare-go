@@ -1,6 +1,6 @@
 # PawIt VetCare Database Schema
 
-The first persistence slice is PostgreSQL-first and designed for Cloud SQL PostgreSQL 17.
+The first persistence slice is PostgreSQL-first and designed for Cloud SQL PostgreSQL 17. The database choice is documented in [postgres-decision.md](postgres-decision.md).
 
 ## Principles
 
