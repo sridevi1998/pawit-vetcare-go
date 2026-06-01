@@ -31,6 +31,25 @@ curl http://localhost:8080/healthz
 curl -H "X-PawIt-Tenant-ID: tenant_demo_clinic" http://localhost:8080/api/v1/pets
 ```
 
+To run against local PostgreSQL instead of the in-memory demo store:
+
+```sh
+docker compose up -d postgres
+PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=disable go run ./cmd/migrate up
+docker compose exec -T postgres psql -U pawit -d pawit < docs/database/local-dev-seed.sql
+PAWIT_ALLOW_DEV_AUTH=true PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=disable go run .
+```
+
+Then use the seeded tenant, user, and role headers:
+
+```sh
+curl \
+  -H "X-PawIt-Tenant-ID: 11111111-1111-1111-1111-111111111111" \
+  -H "X-PawIt-User-ID: 33333333-3333-3333-3333-333333333333" \
+  -H "X-PawIt-Role: ClinicAdmin" \
+  http://localhost:8080/api/v1/billing
+```
+
 ## Production Environment
 
 Required:
@@ -67,7 +86,7 @@ PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=
 
 The production container includes `/app/pawit-migrate` for Cloud Run migration jobs.
 
-When `PAWIT_DATABASE_URL` is set, the API uses PostgreSQL for tenant-scoped reads. Without it, local development uses the in-memory demo store so frontend screens can be built before a database is running.
+When `PAWIT_DATABASE_URL` is set, the API uses PostgreSQL for tenant-scoped reads. Without it, local development uses the in-memory demo store so frontend screens can be built before a database is running. The optional local seed file lives at [docs/database/local-dev-seed.sql](docs/database/local-dev-seed.sql).
 
 ## Database Direction
 
