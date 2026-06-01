@@ -26,6 +26,8 @@ type Store interface {
 	UpdateLabOrderStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UpdateLabOrderStatusInput, idempotencyKey string) (LabOrderMutationResult, error)
 	UploadLabResult(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UploadLabResultInput, idempotencyKey string) (LabOrderMutationResult, error)
 	Billing(ctx context.Context, tenantID string) (map[string]any, error)
+	CreateInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateInvoiceInput, idempotencyKey string) (InvoiceMutationResult, error)
+	VoidInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole Role, invoiceID string, input VoidInvoiceInput, idempotencyKey string) (InvoiceMutationResult, error)
 	Analytics(ctx context.Context, tenantID string) (Analytics, error)
 	Feedback(ctx context.Context, tenantID string) (map[string]any, error)
 	Doctors(ctx context.Context, tenantID string) ([]Person, error)
@@ -297,6 +299,35 @@ func (DemoStore) Billing(ctx context.Context, tenantID string) (map[string]any, 
 		},
 		"invoices": []Invoice{},
 	}, nil
+}
+
+func (DemoStore) CreateInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateInvoiceInput, idempotencyKey string) (InvoiceMutationResult, error) {
+	total := input.TaxCents - input.DiscountCents
+	for _, line := range input.LineItems {
+		total += int64(line.Quantity) * line.UnitAmountCents
+	}
+	status := input.Status
+	if status == "" {
+		status = "issued"
+	}
+	return InvoiceMutationResult{Invoice: Invoice{
+		ID:        "inv_demo_created",
+		PetName:   "Demo Pet",
+		OwnerName: "Demo Guardian",
+		Amount:    total,
+		Status:    status,
+		DueDate:   "",
+	}}, nil
+}
+
+func (DemoStore) VoidInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole Role, invoiceID string, input VoidInvoiceInput, idempotencyKey string) (InvoiceMutationResult, error) {
+	return InvoiceMutationResult{Invoice: Invoice{
+		ID:        invoiceID,
+		PetName:   "Demo Pet",
+		OwnerName: "Demo Guardian",
+		Amount:    0,
+		Status:    "void",
+	}}, nil
 }
 
 func (DemoStore) Analytics(ctx context.Context, tenantID string) (Analytics, error) {

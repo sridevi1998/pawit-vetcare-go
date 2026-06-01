@@ -427,6 +427,83 @@ func TestUploadLabResultAllowsVeterinarianSharing(t *testing.T) {
 	}
 }
 
+func TestCreateInvoiceAllowsReceptionist(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{
+		"locationId": "loc_001",
+		"petId": "pet_001",
+		"lineItems": [
+			{"description": "Wellness exam", "quantity": 1, "unitAmountCents": 6500},
+			{"description": "Rabies vaccine", "quantity": 1, "unitAmountCents": 3200}
+		],
+		"taxCents": 485
+	}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/billing/invoices", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, response.Code, response.Body.String())
+	}
+
+	var payload domain.InvoiceMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Invoice.Amount != 10185 {
+		t.Fatalf("expected invoice amount 10185, got %d", payload.Invoice.Amount)
+	}
+	if payload.Invoice.Status != "issued" {
+		t.Fatalf("expected issued invoice, got %q", payload.Invoice.Status)
+	}
+}
+
+func TestCreateInvoiceRejectsLabTechnician(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"locationId":"loc_001","lineItems":[{"description":"CBC","quantity":1,"unitAmountCents":4500}]}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/billing/invoices", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleLabTechnician))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
+func TestVoidInvoiceRequiresClinicAdminPermission(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/billing/invoices/inv_001/void", strings.NewReader(`{"reason":"billing error"}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
+func TestVoidInvoiceRequiresReason(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/billing/invoices/inv_001/void", strings.NewReader(`{}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleClinicAdmin))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
+	}
+}
+
 func hasPermission(policy domain.RolePolicy, permission domain.Permission) bool {
 	for _, item := range policy.Permissions {
 		if item == permission {

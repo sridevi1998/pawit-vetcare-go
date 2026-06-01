@@ -212,6 +212,33 @@ type Invoice struct {
 	DueDate   string `json:"dueDate"`
 }
 
+type InvoiceLineItemInput struct {
+	Description         string `json:"description"`
+	Quantity            int    `json:"quantity"`
+	UnitAmountCents     int64  `json:"unitAmountCents"`
+	RelatedResourceType string `json:"relatedResourceType,omitempty"`
+	RelatedResourceID   string `json:"relatedResourceId,omitempty"`
+}
+
+type CreateInvoiceInput struct {
+	LocationID    string                 `json:"locationId"`
+	PetID         string                 `json:"petId,omitempty"`
+	Status        string                 `json:"status,omitempty"`
+	DueAt         *string                `json:"dueAt,omitempty"`
+	TaxCents      int64                  `json:"taxCents,omitempty"`
+	DiscountCents int64                  `json:"discountCents,omitempty"`
+	LineItems     []InvoiceLineItemInput `json:"lineItems"`
+}
+
+type VoidInvoiceInput struct {
+	Reason string `json:"reason"`
+}
+
+type InvoiceMutationResult struct {
+	Invoice    Invoice `json:"invoice"`
+	Idempotent bool    `json:"idempotent,omitempty"`
+}
+
 type Person struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`

@@ -61,6 +61,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/lab-tests/{id}/status", s.updateLabOrderStatus)
 	s.mux.HandleFunc("POST /api/v1/lab-tests/{id}/report", s.uploadLabResult)
 	s.mux.HandleFunc("GET /api/v1/billing", s.billing)
+	s.mux.HandleFunc("POST /api/v1/billing/invoices", s.createInvoice)
+	s.mux.HandleFunc("POST /api/v1/billing/invoices/{id}/void", s.voidInvoice)
 	s.mux.HandleFunc("GET /api/v1/analytics", s.analytics)
 	s.mux.HandleFunc("GET /api/v1/feedback", s.feedback)
 	s.mux.HandleFunc("GET /api/v1/doctors", s.doctors)
@@ -432,6 +434,54 @@ func (s *Server) billing(w http.ResponseWriter, r *http.Request) {
 	writeData(w, payload, err)
 }
 
+func (s *Server) createInvoice(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionInvoiceCreate) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot create invoices.")
+		return
+	}
+
+	var input domain.CreateInvoiceInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateCreateInvoice(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.CreateInvoice(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
+	writeMutation(w, http.StatusCreated, result, err)
+}
+
+func (s *Server) voidInvoice(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionPaymentRefundVoid) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot void invoices.")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invoice ID is required.")
+		return
+	}
+
+	var input domain.VoidInvoiceInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if strings.TrimSpace(input.Reason) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Void reason is required.")
+		return
+	}
+
+	result, err := s.store.VoidInvoice(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), id, input, idempotencyKey(r))
+	writeMutation(w, http.StatusOK, result, err)
+}
+
 func (s *Server) analytics(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
 	payload, err := s.store.Analytics(r.Context(), auth.TenantID)
@@ -599,6 +649,46 @@ func validateUploadLabResult(input domain.UploadLabResultInput) error {
 		if _, err := time.Parse(time.RFC3339, *input.CompletedAt); err != nil {
 			return errors.New("completedAt must be RFC3339")
 		}
+	}
+	return nil
+}
+
+func validateCreateInvoice(input domain.CreateInvoiceInput) error {
+	if strings.TrimSpace(input.LocationID) == "" {
+		return errors.New("locationId is required")
+	}
+	if input.Status != "" && input.Status != "draft" && input.Status != "issued" {
+		return errors.New("status must be draft or issued")
+	}
+	if input.DueAt != nil {
+		if _, err := time.Parse(time.RFC3339, *input.DueAt); err != nil {
+			return errors.New("dueAt must be RFC3339")
+		}
+	}
+	if input.TaxCents < 0 {
+		return errors.New("taxCents must be greater than or equal to 0")
+	}
+	if input.DiscountCents < 0 {
+		return errors.New("discountCents must be greater than or equal to 0")
+	}
+	if len(input.LineItems) == 0 {
+		return errors.New("lineItems is required")
+	}
+	var subtotal int64
+	for _, line := range input.LineItems {
+		if strings.TrimSpace(line.Description) == "" {
+			return errors.New("line item description is required")
+		}
+		if line.Quantity <= 0 {
+			return errors.New("line item quantity must be greater than 0")
+		}
+		if line.UnitAmountCents < 0 {
+			return errors.New("line item unitAmountCents must be greater than or equal to 0")
+		}
+		subtotal += int64(line.Quantity) * line.UnitAmountCents
+	}
+	if subtotal+input.TaxCents-input.DiscountCents < 0 {
+		return errors.New("discountCents cannot exceed subtotal plus taxCents")
 	}
 	return nil
 }
