@@ -925,10 +925,18 @@ func (s PostgresStore) LabTests(ctx context.Context, tenantID string) ([]domain.
 			coalesce(c.name, 'Internal lab'),
 			coalesce(c.lab_type::text, 'internal'),
 			o.status::text,
+			coalesce(r.report_object_path, ''),
 			o.shared_with_pet_parent
 		from lab_orders o
 		join pets p on p.id = o.pet_id and p.tenant_id = o.tenant_id
 		left join lab_centers c on c.id = o.lab_center_id and c.tenant_id = o.tenant_id
+		left join lateral (
+			select report_object_path
+			from lab_results
+			where tenant_id = o.tenant_id and lab_order_id = o.id
+			order by created_at desc
+			limit 1
+		) r on true
 		left join lateral (
 			select name
 			from pet_guardians
@@ -949,7 +957,7 @@ func (s PostgresStore) LabTests(ctx context.Context, tenantID string) ([]domain.
 	for rows.Next() {
 		var item domain.LabTest
 		var status string
-		if err := rows.Scan(&item.ID, &item.PetName, &item.OwnerName, &item.TestType, &item.LabCenter, &item.LabType, &status, &item.SharedWithPetParent); err != nil {
+		if err := rows.Scan(&item.ID, &item.PetName, &item.OwnerName, &item.TestType, &item.LabCenter, &item.LabType, &status, &item.ReportURL, &item.SharedWithPetParent); err != nil {
 			return nil, fmt.Errorf("scan lab test: %w", err)
 		}
 		item.Status = domain.LabOrderStatus(status)
@@ -959,6 +967,265 @@ func (s PostgresStore) LabTests(ctx context.Context, tenantID string) ([]domain.
 		return nil, fmt.Errorf("iterate lab tests: %w", err)
 	}
 	return items, nil
+}
+
+func (s PostgresStore) CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateLabOrderInput, idempotencyKey string) (domain.LabOrderMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionLabOrderCreate) {
+		return domain.LabOrderMutationResult{}, domain.ErrForbidden
+	}
+	if !isUUID(actorUserID) {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("%w: actor user id must be a UUID", domain.ErrValidation)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("begin lab order create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(input)
+	if result, ok, err := idempotentLabOrderResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	priority := strings.TrimSpace(input.Priority)
+	if priority == "" {
+		priority = "normal"
+	}
+
+	var labOrderID string
+	err = tx.QueryRow(ctx, `
+		insert into lab_orders (
+			tenant_id,
+			location_id,
+			pet_id,
+			appointment_id,
+			lab_center_id,
+			ordered_by_user_id,
+			test_type,
+			sample_type,
+			priority
+		)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		returning id::text
+	`,
+		tenantID,
+		input.LocationID,
+		input.PetID,
+		uuidOrNil(input.AppointmentID),
+		uuidOrNil(input.LabCenterID),
+		actorUserID,
+		strings.TrimSpace(input.TestType),
+		nullString(input.SampleType),
+		priority,
+	).Scan(&labOrderID)
+	if err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("create lab order: %w", err)
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "lab_order.create", "lab_order", labOrderID, input.TestType); err != nil {
+		return domain.LabOrderMutationResult{}, err
+	}
+
+	labTest, err := labTestByID(ctx, tx, tenantID, labOrderID)
+	if err != nil {
+		return domain.LabOrderMutationResult{}, err
+	}
+	result := domain.LabOrderMutationResult{LabTest: labTest}
+	if err := rememberLabOrderIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusCreated, result); err != nil {
+		return domain.LabOrderMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("commit lab order create: %w", err)
+	}
+	return result, nil
+}
+
+func (s PostgresStore) UpdateLabOrderStatus(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, labOrderID string, input domain.UpdateLabOrderStatusInput, idempotencyKey string) (domain.LabOrderMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionLabOrderProcess) {
+		return domain.LabOrderMutationResult{}, domain.ErrForbidden
+	}
+	if !validLabOrderStatus(input.Status) || input.Status == domain.LabOrdered {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("%w: unsupported lab order status", domain.ErrValidation)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("begin lab order status update: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(struct {
+		LabOrderID string
+		Input      domain.UpdateLabOrderStatusInput
+	}{LabOrderID: labOrderID, Input: input})
+	if result, ok, err := idempotentLabOrderResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	var currentStatus string
+	err = tx.QueryRow(ctx, `
+		select status::text
+		from lab_orders
+		where tenant_id = $1 and id = $2
+		for update
+	`, tenantID, labOrderID).Scan(&currentStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.LabOrderMutationResult{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("read lab order: %w", err)
+	}
+
+	if !labOrderTransitionAllowed(domain.LabOrderStatus(currentStatus), input.Status) {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("%w: lab order cannot move from %s to %s", domain.ErrConflict, currentStatus, input.Status)
+	}
+
+	command, err := tx.Exec(ctx, `
+		update lab_orders
+		set status = $3::lab_order_status,
+			cancelled_at = case when $3::lab_order_status = 'cancelled' then now() else cancelled_at end,
+			updated_at = now()
+		where tenant_id = $1 and id = $2
+	`, tenantID, labOrderID, string(input.Status))
+	if err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("update lab order status: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return domain.LabOrderMutationResult{}, domain.ErrNotFound
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "lab_order."+string(input.Status), "lab_order", labOrderID, input.Reason); err != nil {
+		return domain.LabOrderMutationResult{}, err
+	}
+
+	labTest, err := labTestByID(ctx, tx, tenantID, labOrderID)
+	if err != nil {
+		return domain.LabOrderMutationResult{}, err
+	}
+	result := domain.LabOrderMutationResult{LabTest: labTest}
+	if err := rememberLabOrderIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusOK, result); err != nil {
+		return domain.LabOrderMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("commit lab order status update: %w", err)
+	}
+	return result, nil
+}
+
+func (s PostgresStore) UploadLabResult(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, labOrderID string, input domain.UploadLabResultInput, idempotencyKey string) (domain.LabOrderMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionLabOrderProcess, domain.PermissionLabResultShare) {
+		return domain.LabOrderMutationResult{}, domain.ErrForbidden
+	}
+	if input.ShareWithPetParent && !roleHasAny(actorRole, domain.PermissionLabResultShare) {
+		return domain.LabOrderMutationResult{}, domain.ErrForbidden
+	}
+
+	completedAt, err := parseOptionalTime(input.CompletedAt)
+	if err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("%w: completedAt must be RFC3339", domain.ErrValidation)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("begin lab result upload: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(struct {
+		LabOrderID string
+		Input      domain.UploadLabResultInput
+	}{LabOrderID: labOrderID, Input: input})
+	if result, ok, err := idempotentLabOrderResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	var currentStatus string
+	err = tx.QueryRow(ctx, `
+		select status::text
+		from lab_orders
+		where tenant_id = $1 and id = $2
+		for update
+	`, tenantID, labOrderID).Scan(&currentStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.LabOrderMutationResult{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("read lab order: %w", err)
+	}
+	if currentStatus == string(domain.LabCancelled) {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("%w: cancelled lab orders cannot receive results", domain.ErrConflict)
+	}
+
+	var labResultID string
+	err = tx.QueryRow(ctx, `
+		insert into lab_results (
+			tenant_id,
+			lab_order_id,
+			uploaded_by_user_id,
+			result_notes,
+			report_object_path,
+			completed_at
+		)
+		values (
+			$1,
+			$2,
+			$3,
+			$4,
+			$5,
+			case when $6 then coalesce($7, now()) else $7 end
+		)
+		returning id::text
+	`,
+		tenantID,
+		labOrderID,
+		uuidOrNil(actorUserID),
+		nullString(input.ResultNotes),
+		nullString(input.ReportObjectPath),
+		input.MarkOrderCompleted,
+		completedAt,
+	).Scan(&labResultID)
+	if err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("create lab result: %w", err)
+	}
+
+	nextStatus := domain.LabInProgress
+	if input.MarkOrderCompleted {
+		nextStatus = domain.LabCompleted
+	}
+	if currentStatus == string(domain.LabCompleted) && !input.MarkOrderCompleted {
+		nextStatus = domain.LabCompleted
+	}
+
+	if _, err := tx.Exec(ctx, `
+		update lab_orders
+		set status = $3::lab_order_status,
+			shared_with_pet_parent = shared_with_pet_parent or $4,
+			updated_at = now()
+		where tenant_id = $1 and id = $2
+	`, tenantID, labOrderID, string(nextStatus), input.ShareWithPetParent); err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("update lab order after result upload: %w", err)
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "lab_result.upload", "lab_result", labResultID, input.ResultNotes); err != nil {
+		return domain.LabOrderMutationResult{}, err
+	}
+
+	labTest, err := labTestByID(ctx, tx, tenantID, labOrderID)
+	if err != nil {
+		return domain.LabOrderMutationResult{}, err
+	}
+	result := domain.LabOrderMutationResult{LabTest: labTest}
+	if err := rememberLabOrderIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusCreated, result); err != nil {
+		return domain.LabOrderMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.LabOrderMutationResult{}, fmt.Errorf("commit lab result upload: %w", err)
+	}
+	return result, nil
 }
 
 func (s PostgresStore) Billing(ctx context.Context, tenantID string) (map[string]any, error) {
@@ -992,6 +1259,203 @@ func (s PostgresStore) Billing(ctx context.Context, tenantID string) (map[string
 		},
 		"invoices": invoices,
 	}, nil
+}
+
+func (s PostgresStore) CreateInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateInvoiceInput, idempotencyKey string) (domain.InvoiceMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionInvoiceCreate) {
+		return domain.InvoiceMutationResult{}, domain.ErrForbidden
+	}
+
+	dueAt, err := parseOptionalTime(input.DueAt)
+	if err != nil {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("%w: dueAt must be RFC3339", domain.ErrValidation)
+	}
+
+	status := strings.TrimSpace(input.Status)
+	if status == "" {
+		status = "issued"
+	}
+	if status != "draft" && status != "issued" {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("%w: status must be draft or issued", domain.ErrValidation)
+	}
+	if input.TaxCents < 0 || input.DiscountCents < 0 {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("%w: invoice adjustments must be non-negative", domain.ErrValidation)
+	}
+	if len(input.LineItems) == 0 {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("%w: lineItems is required", domain.ErrValidation)
+	}
+
+	subtotal := int64(0)
+	for _, line := range input.LineItems {
+		if strings.TrimSpace(line.Description) == "" || line.Quantity <= 0 || line.UnitAmountCents < 0 {
+			return domain.InvoiceMutationResult{}, fmt.Errorf("%w: invalid invoice line item", domain.ErrValidation)
+		}
+		subtotal += int64(line.Quantity) * line.UnitAmountCents
+	}
+	total := subtotal + input.TaxCents - input.DiscountCents
+	if total < 0 {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("%w: discount cannot exceed subtotal plus tax", domain.ErrValidation)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("begin invoice create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(input)
+	if result, ok, err := idempotentInvoiceResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	var invoiceID string
+	err = tx.QueryRow(ctx, `
+		insert into invoices (
+			tenant_id,
+			location_id,
+			pet_id,
+			status,
+			subtotal_cents,
+			tax_cents,
+			discount_cents,
+			total_cents,
+			due_at
+		)
+		values ($1, $2, $3, $4::invoice_status, $5, $6, $7, $8, $9)
+		returning id::text
+	`,
+		tenantID,
+		input.LocationID,
+		uuidOrNil(input.PetID),
+		status,
+		subtotal,
+		input.TaxCents,
+		input.DiscountCents,
+		total,
+		dueAt,
+	).Scan(&invoiceID)
+	if err != nil {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("create invoice: %w", err)
+	}
+
+	for _, line := range input.LineItems {
+		lineTotal := int64(line.Quantity) * line.UnitAmountCents
+		if _, err := tx.Exec(ctx, `
+			insert into invoice_line_items (
+				invoice_id,
+				tenant_id,
+				description,
+				quantity,
+				unit_amount_cents,
+				total_amount_cents,
+				related_resource_type,
+				related_resource_id
+			)
+			values ($1, $2, $3, $4, $5, $6, $7, $8)
+		`,
+			invoiceID,
+			tenantID,
+			strings.TrimSpace(line.Description),
+			line.Quantity,
+			line.UnitAmountCents,
+			lineTotal,
+			nullString(line.RelatedResourceType),
+			uuidOrNil(line.RelatedResourceID),
+		); err != nil {
+			return domain.InvoiceMutationResult{}, fmt.Errorf("create invoice line item: %w", err)
+		}
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "invoice.create", "invoice", invoiceID, status); err != nil {
+		return domain.InvoiceMutationResult{}, err
+	}
+
+	invoice, err := invoiceByID(ctx, tx, tenantID, invoiceID)
+	if err != nil {
+		return domain.InvoiceMutationResult{}, err
+	}
+	result := domain.InvoiceMutationResult{Invoice: invoice}
+	if err := rememberInvoiceIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusCreated, result); err != nil {
+		return domain.InvoiceMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("commit invoice create: %w", err)
+	}
+	return result, nil
+}
+
+func (s PostgresStore) VoidInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, invoiceID string, input domain.VoidInvoiceInput, idempotencyKey string) (domain.InvoiceMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionPaymentRefundVoid) {
+		return domain.InvoiceMutationResult{}, domain.ErrForbidden
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("begin invoice void: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(struct {
+		InvoiceID string
+		Input     domain.VoidInvoiceInput
+	}{InvoiceID: invoiceID, Input: input})
+	if result, ok, err := idempotentInvoiceResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	var status string
+	err = tx.QueryRow(ctx, `
+		select status::text
+		from invoices
+		where tenant_id = $1 and id = $2
+		for update
+	`, tenantID, invoiceID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.InvoiceMutationResult{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("read invoice: %w", err)
+	}
+	switch status {
+	case "draft", "issued", "pending":
+	case "void":
+		return domain.InvoiceMutationResult{}, fmt.Errorf("%w: invoice is already void", domain.ErrConflict)
+	default:
+		return domain.InvoiceMutationResult{}, fmt.Errorf("%w: %s invoices cannot be voided", domain.ErrConflict, status)
+	}
+
+	command, err := tx.Exec(ctx, `
+		update invoices
+		set status = 'void',
+			voided_at = now(),
+			updated_at = now()
+		where tenant_id = $1 and id = $2
+	`, tenantID, invoiceID)
+	if err != nil {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("void invoice: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return domain.InvoiceMutationResult{}, domain.ErrNotFound
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "invoice.void", "invoice", invoiceID, input.Reason); err != nil {
+		return domain.InvoiceMutationResult{}, err
+	}
+
+	invoice, err := invoiceByID(ctx, tx, tenantID, invoiceID)
+	if err != nil {
+		return domain.InvoiceMutationResult{}, err
+	}
+	result := domain.InvoiceMutationResult{Invoice: invoice}
+	if err := rememberInvoiceIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusOK, result); err != nil {
+		return domain.InvoiceMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.InvoiceMutationResult{}, fmt.Errorf("commit invoice void: %w", err)
+	}
+	return result, nil
 }
 
 func (s PostgresStore) Analytics(ctx context.Context, tenantID string) (domain.Analytics, error) {
@@ -1120,6 +1584,40 @@ func (s PostgresStore) invoices(ctx context.Context, tenantID string) ([]domain.
 		return nil, fmt.Errorf("iterate invoices: %w", err)
 	}
 	return items, nil
+}
+
+func invoiceByID(ctx context.Context, q rowQuerier, tenantID string, invoiceID string) (domain.Invoice, error) {
+	var item domain.Invoice
+	var dueAt sql.NullTime
+	err := q.QueryRow(ctx, `
+		select
+			i.id::text,
+			coalesce(p.name, ''),
+			coalesce(g.name, ''),
+			i.total_cents,
+			i.status::text,
+			i.due_at
+		from invoices i
+		left join pets p on p.id = i.pet_id and p.tenant_id = i.tenant_id
+		left join lateral (
+			select name
+			from pet_guardians
+			where tenant_id = i.tenant_id and pet_id = i.pet_id and archived_at is null
+			order by is_primary desc, created_at
+			limit 1
+		) g on true
+		where i.tenant_id = $1 and i.id = $2
+	`, tenantID, invoiceID).Scan(&item.ID, &item.PetName, &item.OwnerName, &item.Amount, &item.Status, &dueAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Invoice{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.Invoice{}, fmt.Errorf("read invoice: %w", err)
+	}
+	if dueAt.Valid {
+		item.DueDate = dueAt.Time.UTC().Format(time.DateOnly)
+	}
+	return item, nil
 }
 
 func (s PostgresStore) groupCount(ctx context.Context, query string, tenantID string) (map[string]int, error) {
@@ -1362,6 +1860,49 @@ func petDocumentByID(ctx context.Context, q rowQuerier, tenantID string, documen
 	return item, nil
 }
 
+func labTestByID(ctx context.Context, q rowQuerier, tenantID string, labOrderID string) (domain.LabTest, error) {
+	var item domain.LabTest
+	var status string
+	err := q.QueryRow(ctx, `
+		select
+			o.id::text,
+			p.name,
+			coalesce(g.name, ''),
+			o.test_type,
+			coalesce(c.name, 'Internal lab'),
+			coalesce(c.lab_type::text, 'internal'),
+			o.status::text,
+			coalesce(r.report_object_path, ''),
+			o.shared_with_pet_parent
+		from lab_orders o
+		join pets p on p.id = o.pet_id and p.tenant_id = o.tenant_id
+		left join lab_centers c on c.id = o.lab_center_id and c.tenant_id = o.tenant_id
+		left join lateral (
+			select report_object_path
+			from lab_results
+			where tenant_id = o.tenant_id and lab_order_id = o.id
+			order by created_at desc
+			limit 1
+		) r on true
+		left join lateral (
+			select name
+			from pet_guardians
+			where tenant_id = o.tenant_id and pet_id = o.pet_id and archived_at is null
+			order by is_primary desc, created_at
+			limit 1
+		) g on true
+		where o.tenant_id = $1 and o.id = $2
+	`, tenantID, labOrderID).Scan(&item.ID, &item.PetName, &item.OwnerName, &item.TestType, &item.LabCenter, &item.LabType, &status, &item.ReportURL, &item.SharedWithPetParent)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.LabTest{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.LabTest{}, fmt.Errorf("read lab order: %w", err)
+	}
+	item.Status = domain.LabOrderStatus(status)
+	return item, nil
+}
+
 func roleHasAny(role domain.Role, permissions ...domain.Permission) bool {
 	for _, policy := range domain.PawItRolePolicies() {
 		if policy.Role != role {
@@ -1382,6 +1923,33 @@ func validQueueStatus(status domain.QueueStatus) bool {
 	switch status {
 	case domain.QueueWaiting, domain.QueueCalled, domain.QueueInProgress, domain.QueueCompleted, domain.QueueCancelled:
 		return true
+	default:
+		return false
+	}
+}
+
+func validLabOrderStatus(status domain.LabOrderStatus) bool {
+	switch status {
+	case domain.LabOrdered, domain.LabSampleCollected, domain.LabSentOut, domain.LabInProgress, domain.LabCompleted, domain.LabCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func labOrderTransitionAllowed(current domain.LabOrderStatus, next domain.LabOrderStatus) bool {
+	if current == next {
+		return true
+	}
+	switch current {
+	case domain.LabOrdered:
+		return next == domain.LabSampleCollected || next == domain.LabSentOut || next == domain.LabInProgress || next == domain.LabCancelled
+	case domain.LabSampleCollected:
+		return next == domain.LabSentOut || next == domain.LabInProgress || next == domain.LabCompleted || next == domain.LabCancelled
+	case domain.LabSentOut:
+		return next == domain.LabInProgress || next == domain.LabCompleted || next == domain.LabCancelled
+	case domain.LabInProgress:
+		return next == domain.LabCompleted || next == domain.LabCancelled
 	default:
 		return false
 	}
@@ -1572,6 +2140,66 @@ func idempotentPetDocumentResult(ctx context.Context, tx pgx.Tx, tenantID string
 	return result, true, nil
 }
 
+func idempotentLabOrderResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string) (domain.LabOrderMutationResult, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return domain.LabOrderMutationResult{}, false, nil
+	}
+
+	var existingHash string
+	var body []byte
+	err := tx.QueryRow(ctx, `
+		select request_hash, response_body
+		from idempotency_keys
+		where tenant_id = $1 and key = $2 and expires_at > now()
+	`, tenantID, key).Scan(&existingHash, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.LabOrderMutationResult{}, false, nil
+	}
+	if err != nil {
+		return domain.LabOrderMutationResult{}, false, fmt.Errorf("read idempotency key: %w", err)
+	}
+	if existingHash != requestHash {
+		return domain.LabOrderMutationResult{}, true, fmt.Errorf("%w: idempotency key was already used with a different request", domain.ErrConflict)
+	}
+	var result domain.LabOrderMutationResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return domain.LabOrderMutationResult{}, false, fmt.Errorf("decode idempotent response: %w", err)
+	}
+	result.Idempotent = true
+	return result, true, nil
+}
+
+func idempotentInvoiceResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string) (domain.InvoiceMutationResult, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return domain.InvoiceMutationResult{}, false, nil
+	}
+
+	var existingHash string
+	var body []byte
+	err := tx.QueryRow(ctx, `
+		select request_hash, response_body
+		from idempotency_keys
+		where tenant_id = $1 and key = $2 and expires_at > now()
+	`, tenantID, key).Scan(&existingHash, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.InvoiceMutationResult{}, false, nil
+	}
+	if err != nil {
+		return domain.InvoiceMutationResult{}, false, fmt.Errorf("read idempotency key: %w", err)
+	}
+	if existingHash != requestHash {
+		return domain.InvoiceMutationResult{}, true, fmt.Errorf("%w: idempotency key was already used with a different request", domain.ErrConflict)
+	}
+	var result domain.InvoiceMutationResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return domain.InvoiceMutationResult{}, false, fmt.Errorf("decode idempotent response: %w", err)
+	}
+	result.Idempotent = true
+	return result, true, nil
+}
+
 func rememberIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.AppointmentMutationResult) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -1633,6 +2261,46 @@ func rememberPetIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string
 }
 
 func rememberPetDocumentIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.PetDocumentMutationResult) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode idempotent response: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		insert into idempotency_keys (tenant_id, key, request_hash, response_status, response_body)
+		values ($1, $2, $3, $4, $5)
+		on conflict (tenant_id, key) do nothing
+	`, tenantID, key, requestHash, status, body)
+	if err != nil {
+		return fmt.Errorf("record idempotency key: %w", err)
+	}
+	return nil
+}
+
+func rememberLabOrderIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.LabOrderMutationResult) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode idempotent response: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		insert into idempotency_keys (tenant_id, key, request_hash, response_status, response_body)
+		values ($1, $2, $3, $4, $5)
+		on conflict (tenant_id, key) do nothing
+	`, tenantID, key, requestHash, status, body)
+	if err != nil {
+		return fmt.Errorf("record idempotency key: %w", err)
+	}
+	return nil
+}
+
+func rememberInvoiceIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.InvoiceMutationResult) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil

@@ -2,6 +2,11 @@
 
 Base path: `/api/v1`
 
+The formal OpenAPI contract lives in the sibling `pawit-vetcare-contracts` repo:
+
+- `openapi/pawit.v1.yaml`
+- Generated TypeScript types: `src/pawit-api.ts`
+
 All application endpoints require:
 
 - A valid `pawit_access` cookie or `Authorization: Bearer <jwt>`
@@ -35,7 +40,12 @@ All application endpoints require:
 | `GET` | `/prescription-templates` | Veterinary prescription templates |
 | `GET` | `/clinical-notes` | SOAP notes and consultations |
 | `GET` | `/lab-tests` | Diagnostics and reports |
+| `POST` | `/lab-tests` | Create an internal or external lab order |
+| `POST` | `/lab-tests/{id}/status` | Process a lab order through sample/result statuses |
+| `POST` | `/lab-tests/{id}/report` | Upload lab result metadata and optionally share it |
 | `GET` | `/billing` | Billing metrics and invoices |
+| `POST` | `/billing/invoices` | Create a draft or issued invoice with line items |
+| `POST` | `/billing/invoices/{id}/void` | Void an invoice with audited ClinicAdmin approval |
 | `GET` | `/analytics` | Demographics, appointments, revenue, diagnoses |
 | `GET` | `/feedback` | Reviews and rating distribution |
 | `GET` | `/doctors` | Veterinarian management |
@@ -43,8 +53,7 @@ All application endpoints require:
 
 ## Next Contract Slice
 
-- Add OpenAPI 3.1 spec in `pawit-vetcare-contracts`
 - Generate frontend TypeScript clients from OpenAPI
-- Expand PostgreSQL repositories with create/update workflows for invoices, lab reports, staff, prescriptions, and documents
+- Expand PostgreSQL repositories with create/update workflows for staff, prescriptions, and remaining documents
 - Add idempotency-key support to the remaining mutation endpoints
 - Add shared contract tests for API responses used by the hospital portal

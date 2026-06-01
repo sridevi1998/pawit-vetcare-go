@@ -175,6 +175,34 @@ type LabTest struct {
 	SharedWithPetParent bool           `json:"sharedWithPetParent"`
 }
 
+type CreateLabOrderInput struct {
+	LocationID    string `json:"locationId"`
+	PetID         string `json:"petId"`
+	AppointmentID string `json:"appointmentId,omitempty"`
+	LabCenterID   string `json:"labCenterId,omitempty"`
+	TestType      string `json:"testType"`
+	SampleType    string `json:"sampleType,omitempty"`
+	Priority      string `json:"priority,omitempty"`
+}
+
+type UpdateLabOrderStatusInput struct {
+	Status LabOrderStatus `json:"status"`
+	Reason string         `json:"reason,omitempty"`
+}
+
+type UploadLabResultInput struct {
+	ResultNotes        string  `json:"resultNotes,omitempty"`
+	ReportObjectPath   string  `json:"reportObjectPath,omitempty"`
+	ShareWithPetParent bool    `json:"shareWithPetParent,omitempty"`
+	CompletedAt        *string `json:"completedAt,omitempty"`
+	MarkOrderCompleted bool    `json:"markOrderCompleted,omitempty"`
+}
+
+type LabOrderMutationResult struct {
+	LabTest    LabTest `json:"labTest"`
+	Idempotent bool    `json:"idempotent,omitempty"`
+}
+
 type Invoice struct {
 	ID        string `json:"id"`
 	PetName   string `json:"petName"`
@@ -182,6 +210,33 @@ type Invoice struct {
 	Amount    int64  `json:"amount"`
 	Status    string `json:"status"`
 	DueDate   string `json:"dueDate"`
+}
+
+type InvoiceLineItemInput struct {
+	Description         string `json:"description"`
+	Quantity            int    `json:"quantity"`
+	UnitAmountCents     int64  `json:"unitAmountCents"`
+	RelatedResourceType string `json:"relatedResourceType,omitempty"`
+	RelatedResourceID   string `json:"relatedResourceId,omitempty"`
+}
+
+type CreateInvoiceInput struct {
+	LocationID    string                 `json:"locationId"`
+	PetID         string                 `json:"petId,omitempty"`
+	Status        string                 `json:"status,omitempty"`
+	DueAt         *string                `json:"dueAt,omitempty"`
+	TaxCents      int64                  `json:"taxCents,omitempty"`
+	DiscountCents int64                  `json:"discountCents,omitempty"`
+	LineItems     []InvoiceLineItemInput `json:"lineItems"`
+}
+
+type VoidInvoiceInput struct {
+	Reason string `json:"reason"`
+}
+
+type InvoiceMutationResult struct {
+	Invoice    Invoice `json:"invoice"`
+	Idempotent bool    `json:"idempotent,omitempty"`
 }
 
 type Person struct {

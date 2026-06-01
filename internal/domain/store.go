@@ -22,7 +22,12 @@ type Store interface {
 	PrescriptionTemplates(ctx context.Context, tenantID string) ([]PrescriptionTemplate, error)
 	ClinicalNotes(ctx context.Context, tenantID string) ([]ClinicalNote, error)
 	LabTests(ctx context.Context, tenantID string) ([]LabTest, error)
+	CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateLabOrderInput, idempotencyKey string) (LabOrderMutationResult, error)
+	UpdateLabOrderStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UpdateLabOrderStatusInput, idempotencyKey string) (LabOrderMutationResult, error)
+	UploadLabResult(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UploadLabResultInput, idempotencyKey string) (LabOrderMutationResult, error)
 	Billing(ctx context.Context, tenantID string) (map[string]any, error)
+	CreateInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateInvoiceInput, idempotencyKey string) (InvoiceMutationResult, error)
+	VoidInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole Role, invoiceID string, input VoidInvoiceInput, idempotencyKey string) (InvoiceMutationResult, error)
 	Analytics(ctx context.Context, tenantID string) (Analytics, error)
 	Feedback(ctx context.Context, tenantID string) (map[string]any, error)
 	Doctors(ctx context.Context, tenantID string) ([]Person, error)
@@ -242,6 +247,48 @@ func (DemoStore) LabTests(ctx context.Context, tenantID string) ([]LabTest, erro
 	}, nil
 }
 
+func (DemoStore) CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateLabOrderInput, idempotencyKey string) (LabOrderMutationResult, error) {
+	return LabOrderMutationResult{LabTest: LabTest{
+		ID:        "lab_demo_created",
+		PetName:   "Demo Pet",
+		OwnerName: "Demo Guardian",
+		TestType:  input.TestType,
+		LabCenter: "Internal lab",
+		LabType:   "internal",
+		Status:    LabOrdered,
+	}}, nil
+}
+
+func (DemoStore) UpdateLabOrderStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UpdateLabOrderStatusInput, idempotencyKey string) (LabOrderMutationResult, error) {
+	return LabOrderMutationResult{LabTest: LabTest{
+		ID:        labOrderID,
+		PetName:   "Demo Pet",
+		OwnerName: "Demo Guardian",
+		TestType:  "Demo lab test",
+		LabCenter: "Internal lab",
+		LabType:   "internal",
+		Status:    input.Status,
+	}}, nil
+}
+
+func (DemoStore) UploadLabResult(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UploadLabResultInput, idempotencyKey string) (LabOrderMutationResult, error) {
+	status := LabInProgress
+	if input.MarkOrderCompleted {
+		status = LabCompleted
+	}
+	return LabOrderMutationResult{LabTest: LabTest{
+		ID:                  labOrderID,
+		PetName:             "Demo Pet",
+		OwnerName:           "Demo Guardian",
+		TestType:            "Demo lab test",
+		LabCenter:           "Internal lab",
+		LabType:             "internal",
+		Status:              status,
+		ReportURL:           input.ReportObjectPath,
+		SharedWithPetParent: input.ShareWithPetParent,
+	}}, nil
+}
+
 func (DemoStore) Billing(ctx context.Context, tenantID string) (map[string]any, error) {
 	return map[string]any{
 		"metrics": []Metric{
@@ -252,6 +299,35 @@ func (DemoStore) Billing(ctx context.Context, tenantID string) (map[string]any, 
 		},
 		"invoices": []Invoice{},
 	}, nil
+}
+
+func (DemoStore) CreateInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateInvoiceInput, idempotencyKey string) (InvoiceMutationResult, error) {
+	total := input.TaxCents - input.DiscountCents
+	for _, line := range input.LineItems {
+		total += int64(line.Quantity) * line.UnitAmountCents
+	}
+	status := input.Status
+	if status == "" {
+		status = "issued"
+	}
+	return InvoiceMutationResult{Invoice: Invoice{
+		ID:        "inv_demo_created",
+		PetName:   "Demo Pet",
+		OwnerName: "Demo Guardian",
+		Amount:    total,
+		Status:    status,
+		DueDate:   "",
+	}}, nil
+}
+
+func (DemoStore) VoidInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole Role, invoiceID string, input VoidInvoiceInput, idempotencyKey string) (InvoiceMutationResult, error) {
+	return InvoiceMutationResult{Invoice: Invoice{
+		ID:        invoiceID,
+		PetName:   "Demo Pet",
+		OwnerName: "Demo Guardian",
+		Amount:    0,
+		Status:    "void",
+	}}, nil
 }
 
 func (DemoStore) Analytics(ctx context.Context, tenantID string) (Analytics, error) {
