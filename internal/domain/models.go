@@ -139,6 +139,10 @@ type UploadPetDocumentInput struct {
 	SizeBytes    int64  `json:"sizeBytes"`
 }
 
+type ArchivePetDocumentInput struct {
+	Reason string `json:"reason"`
+}
+
 type PetDocumentMutationResult struct {
 	Document   PetDocument `json:"document"`
 	Idempotent bool        `json:"idempotent,omitempty"`

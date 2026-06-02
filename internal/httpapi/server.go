@@ -52,7 +52,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/pets", s.patients)
 	s.mux.HandleFunc("POST /api/v1/pets", s.createPet)
 	s.mux.HandleFunc("POST /api/v1/pets/{id}/archive", s.archivePet)
+	s.mux.HandleFunc("GET /api/v1/pets/{id}/documents", s.petDocuments)
 	s.mux.HandleFunc("POST /api/v1/pets/{id}/documents", s.uploadPetDocument)
+	s.mux.HandleFunc("POST /api/v1/pets/{id}/documents/{documentId}/archive", s.archivePetDocument)
 	s.mux.HandleFunc("GET /api/v1/patients", s.patients)
 	s.mux.HandleFunc("GET /api/v1/prescriptions", s.prescriptions)
 	s.mux.HandleFunc("POST /api/v1/prescriptions", s.createPrescription)
@@ -333,6 +335,55 @@ func (s *Server) uploadPetDocument(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.store.UploadPetDocument(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), id, input, idempotencyKey(r))
 	writeMutation(w, http.StatusCreated, result, err)
+}
+
+func (s *Server) petDocuments(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionPetRecordManage, domain.PermissionPetRecordManageOwn, domain.PermissionPetDocumentUpload) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot view pet documents.")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Pet ID is required.")
+		return
+	}
+
+	items, err := s.store.PetDocuments(r.Context(), auth.TenantID, id)
+	writeData(w, map[string]any{"items": items}, err)
+}
+
+func (s *Server) archivePetDocument(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionPetRecordManage) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot archive pet documents.")
+		return
+	}
+
+	petID := strings.TrimSpace(r.PathValue("id"))
+	if petID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Pet ID is required.")
+		return
+	}
+	documentID := strings.TrimSpace(r.PathValue("documentId"))
+	if documentID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Document ID is required.")
+		return
+	}
+
+	var input domain.ArchivePetDocumentInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if strings.TrimSpace(input.Reason) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Archive reason is required.")
+		return
+	}
+
+	result, err := s.store.ArchivePetDocument(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), petID, documentID, input, idempotencyKey(r))
+	writeMutation(w, http.StatusOK, result, err)
 }
 
 func (s *Server) prescriptionTemplates(w http.ResponseWriter, r *http.Request) {

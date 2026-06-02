@@ -797,6 +797,48 @@ func (s PostgresStore) ArchivePet(ctx context.Context, tenantID string, actorUse
 	return result, nil
 }
 
+func (s PostgresStore) PetDocuments(ctx context.Context, tenantID string, petID string) ([]domain.PetDocument, error) {
+	if _, err := patientByID(ctx, s.pool, tenantID, petID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		select
+			id::text,
+			pet_id::text,
+			title,
+			document_type,
+			object_path,
+			content_type,
+			size_bytes,
+			status::text,
+			created_at
+		from pet_documents
+		where tenant_id = $1 and pet_id = $2 and archived_at is null
+		order by created_at desc
+		limit 100
+	`, tenantID, petID)
+	if err != nil {
+		return nil, fmt.Errorf("read pet documents: %w", err)
+	}
+	defer rows.Close()
+
+	items := []domain.PetDocument{}
+	for rows.Next() {
+		var item domain.PetDocument
+		var createdAt time.Time
+		if err := rows.Scan(&item.ID, &item.PetID, &item.Title, &item.DocumentType, &item.ObjectPath, &item.ContentType, &item.SizeBytes, &item.Status, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan pet document: %w", err)
+		}
+		item.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pet documents: %w", err)
+	}
+	return items, nil
+}
+
 func (s PostgresStore) UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, input domain.UploadPetDocumentInput, idempotencyKey string) (domain.PetDocumentMutationResult, error) {
 	if !roleHasAny(actorRole, domain.PermissionPetDocumentUpload) {
 		return domain.PetDocumentMutationResult{}, domain.ErrForbidden
@@ -863,6 +905,60 @@ func (s PostgresStore) UploadPetDocument(ctx context.Context, tenantID string, a
 
 	if err := tx.Commit(ctx); err != nil {
 		return domain.PetDocumentMutationResult{}, fmt.Errorf("commit pet document upload: %w", err)
+	}
+	return result, nil
+}
+
+func (s PostgresStore) ArchivePetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, documentID string, input domain.ArchivePetDocumentInput, idempotencyKey string) (domain.PetDocumentMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionPetRecordManage) {
+		return domain.PetDocumentMutationResult{}, domain.ErrForbidden
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.PetDocumentMutationResult{}, fmt.Errorf("begin pet document archive: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(struct {
+		PetID      string
+		DocumentID string
+		Input      domain.ArchivePetDocumentInput
+	}{PetID: petID, DocumentID: documentID, Input: input})
+	if result, ok, err := idempotentPetDocumentResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	document, err := petDocumentByPetID(ctx, tx, tenantID, petID, documentID)
+	if err != nil {
+		return domain.PetDocumentMutationResult{}, err
+	}
+
+	command, err := tx.Exec(ctx, `
+		update pet_documents
+		set status = 'archived',
+			archived_at = now()
+		where tenant_id = $1 and pet_id = $2 and id = $3 and archived_at is null
+	`, tenantID, petID, documentID)
+	if err != nil {
+		return domain.PetDocumentMutationResult{}, fmt.Errorf("archive pet document: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return domain.PetDocumentMutationResult{}, domain.ErrNotFound
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "pet_document.archive", "pet_document", documentID, input.Reason); err != nil {
+		return domain.PetDocumentMutationResult{}, err
+	}
+
+	document.Status = "archived"
+	result := domain.PetDocumentMutationResult{Document: document}
+	if err := rememberPetDocumentIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusOK, result); err != nil {
+		return domain.PetDocumentMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.PetDocumentMutationResult{}, fmt.Errorf("commit pet document archive: %w", err)
 	}
 	return result, nil
 }
@@ -2229,6 +2325,33 @@ func petDocumentByID(ctx context.Context, q rowQuerier, tenantID string, documen
 		from pet_documents
 		where tenant_id = $1 and id = $2 and archived_at is null
 	`, tenantID, documentID).Scan(&item.ID, &item.PetID, &item.Title, &item.DocumentType, &item.ObjectPath, &item.ContentType, &item.SizeBytes, &item.Status, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.PetDocument{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.PetDocument{}, fmt.Errorf("read pet document: %w", err)
+	}
+	item.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	return item, nil
+}
+
+func petDocumentByPetID(ctx context.Context, q rowQuerier, tenantID string, petID string, documentID string) (domain.PetDocument, error) {
+	var item domain.PetDocument
+	var createdAt time.Time
+	err := q.QueryRow(ctx, `
+		select
+			id::text,
+			pet_id::text,
+			title,
+			document_type,
+			object_path,
+			content_type,
+			size_bytes,
+			status::text,
+			created_at
+		from pet_documents
+		where tenant_id = $1 and pet_id = $2 and id = $3 and archived_at is null
+	`, tenantID, petID, documentID).Scan(&item.ID, &item.PetID, &item.Title, &item.DocumentType, &item.ObjectPath, &item.ContentType, &item.SizeBytes, &item.Status, &createdAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.PetDocument{}, domain.ErrNotFound
 	}

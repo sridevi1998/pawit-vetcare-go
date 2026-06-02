@@ -69,6 +69,6 @@ The Cloud Run migration job manifest is in `deployments/cloud-run/migration-job.
 - `audit_logs`
 - `idempotency_keys`
 
-## Next Persistence Step
+## Next Integration Step
 
-Add write repositories and idempotent mutation endpoints for remaining document workflows.
+Add shared contract tests for API responses used by the hospital portal and generate frontend clients from the OpenAPI source of truth.
