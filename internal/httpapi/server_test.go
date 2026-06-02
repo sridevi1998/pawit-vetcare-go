@@ -154,6 +154,93 @@ func TestUploadPetDocumentAllowsReceptionist(t *testing.T) {
 	}
 }
 
+func TestCreatePrescriptionAllowsVetTechnicianDraft(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{
+		"locationId": "loc_001",
+		"petId": "pet_001",
+		"instructions": "Give with food and call clinic if vomiting occurs.",
+		"medications": [
+			{"medicationName": "Cetirizine", "dosage": "weight based", "frequency": "daily", "duration": "5 days"}
+		]
+	}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/prescriptions", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleVetTechnician))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, response.Code, response.Body.String())
+	}
+
+	var payload domain.PrescriptionMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Prescription.Status != "draft" {
+		t.Fatalf("expected draft prescription, got %q", payload.Prescription.Status)
+	}
+	if len(payload.Prescription.MedicationNames) != 1 || payload.Prescription.MedicationNames[0] != "Cetirizine" {
+		t.Fatalf("unexpected medications %#v", payload.Prescription.MedicationNames)
+	}
+}
+
+func TestCreatePrescriptionRejectsReceptionist(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"locationId":"loc_001","petId":"pet_001","medications":[{"medicationName":"Cetirizine"}]}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/prescriptions", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
+func TestFinalizePrescriptionAllowsVeterinarian(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/prescriptions/rx_001/finalize", strings.NewReader(`{"shareWithPetParent":true}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleVeterinarian))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	var payload domain.PrescriptionMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Prescription.Status != "finalized" {
+		t.Fatalf("expected finalized prescription, got %q", payload.Prescription.Status)
+	}
+	if !payload.Prescription.SharedWithPetParent {
+		t.Fatal("expected finalized prescription to be shared")
+	}
+}
+
+func TestFinalizePrescriptionRejectsVetTechnician(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/prescriptions/rx_001/finalize", strings.NewReader(`{}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleVetTechnician))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
 func TestProductSpecMatchesApprovedV1Scope(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/product-spec", nil)

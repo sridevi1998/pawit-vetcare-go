@@ -871,6 +871,225 @@ func (s PostgresStore) PrescriptionTemplates(ctx context.Context, tenantID strin
 	return s.demo.PrescriptionTemplates(ctx, tenantID)
 }
 
+func (s PostgresStore) Prescriptions(ctx context.Context, tenantID string) ([]domain.Prescription, error) {
+	rows, err := s.pool.Query(ctx, `
+		select
+			pr.id::text,
+			p.name,
+			coalesce(g.name, ''),
+			pr.status::text,
+			coalesce(string_agg(pm.medication_name, ', ' order by pm.medication_name), ''),
+			coalesce(pr.instructions, ''),
+			pr.shared_with_pet_parent,
+			pr.updated_at
+		from prescriptions pr
+		join pets p on p.id = pr.pet_id and p.tenant_id = pr.tenant_id
+		left join prescription_medications pm on pm.prescription_id = pr.id
+		left join lateral (
+			select name
+			from pet_guardians
+			where tenant_id = pr.tenant_id and pet_id = pr.pet_id and archived_at is null
+			order by is_primary desc, created_at
+			limit 1
+		) g on true
+		where pr.tenant_id = $1 and pr.archived_at is null
+		group by pr.id, p.name, g.name
+		order by pr.updated_at desc
+		limit 100
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("read prescriptions: %w", err)
+	}
+	defer rows.Close()
+
+	items := []domain.Prescription{}
+	for rows.Next() {
+		var item domain.Prescription
+		var medications string
+		var updatedAt time.Time
+		if err := rows.Scan(&item.ID, &item.PetName, &item.OwnerName, &item.Status, &medications, &item.Instructions, &item.SharedWithPetParent, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan prescription: %w", err)
+		}
+		item.MedicationNames = splitNames(medications)
+		item.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate prescriptions: %w", err)
+	}
+	return items, nil
+}
+
+func (s PostgresStore) CreatePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreatePrescriptionInput, idempotencyKey string) (domain.PrescriptionMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionPrescriptionDraft) {
+		return domain.PrescriptionMutationResult{}, domain.ErrForbidden
+	}
+	if !isUUID(actorUserID) {
+		return domain.PrescriptionMutationResult{}, fmt.Errorf("%w: actor user id must be a UUID", domain.ErrValidation)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.PrescriptionMutationResult{}, fmt.Errorf("begin prescription create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(input)
+	if result, ok, err := idempotentPrescriptionResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	prescribingVetID := input.PrescribingVeterinarianID
+	if strings.TrimSpace(prescribingVetID) == "" && actorRole == domain.RoleVeterinarian {
+		prescribingVetID = actorUserID
+	}
+
+	var prescriptionID string
+	err = tx.QueryRow(ctx, `
+		insert into prescriptions (
+			tenant_id,
+			location_id,
+			pet_id,
+			appointment_id,
+			created_by_user_id,
+			prescribing_veterinarian_user_id,
+			status,
+			instructions,
+			shared_with_pet_parent
+		)
+		values ($1, $2, $3, $4, $5, $6, 'draft', $7, $8)
+		returning id::text
+	`,
+		tenantID,
+		input.LocationID,
+		input.PetID,
+		uuidOrNil(input.AppointmentID),
+		actorUserID,
+		uuidOrNil(prescribingVetID),
+		nullString(input.Instructions),
+		input.SharedWithPetParent,
+	).Scan(&prescriptionID)
+	if err != nil {
+		return domain.PrescriptionMutationResult{}, fmt.Errorf("create prescription: %w", err)
+	}
+
+	for _, medication := range input.Medications {
+		if _, err := tx.Exec(ctx, `
+			insert into prescription_medications (
+				prescription_id,
+				medication_name,
+				strength,
+				dosage,
+				frequency,
+				duration,
+				route,
+				instructions
+			)
+			values ($1, $2, $3, $4, $5, $6, $7, $8)
+		`,
+			prescriptionID,
+			strings.TrimSpace(medication.MedicationName),
+			nullString(medication.Strength),
+			nullString(medication.Dosage),
+			nullString(medication.Frequency),
+			nullString(medication.Duration),
+			nullString(medication.Route),
+			nullString(medication.Instructions),
+		); err != nil {
+			return domain.PrescriptionMutationResult{}, fmt.Errorf("create prescription medication: %w", err)
+		}
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "prescription.create", "prescription", prescriptionID, input.Instructions); err != nil {
+		return domain.PrescriptionMutationResult{}, err
+	}
+
+	prescription, err := prescriptionByID(ctx, tx, tenantID, prescriptionID)
+	if err != nil {
+		return domain.PrescriptionMutationResult{}, err
+	}
+	result := domain.PrescriptionMutationResult{Prescription: prescription}
+	if err := rememberPrescriptionIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusCreated, result); err != nil {
+		return domain.PrescriptionMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.PrescriptionMutationResult{}, fmt.Errorf("commit prescription create: %w", err)
+	}
+	return result, nil
+}
+
+func (s PostgresStore) FinalizePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, prescriptionID string, input domain.FinalizePrescriptionInput, idempotencyKey string) (domain.PrescriptionMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionPrescriptionFinalize) {
+		return domain.PrescriptionMutationResult{}, domain.ErrForbidden
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.PrescriptionMutationResult{}, fmt.Errorf("begin prescription finalize: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(struct {
+		PrescriptionID string
+		Input          domain.FinalizePrescriptionInput
+	}{PrescriptionID: prescriptionID, Input: input})
+	if result, ok, err := idempotentPrescriptionResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	var currentStatus string
+	err = tx.QueryRow(ctx, `
+		select status::text
+		from prescriptions
+		where tenant_id = $1 and id = $2 and archived_at is null
+		for update
+	`, tenantID, prescriptionID).Scan(&currentStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.PrescriptionMutationResult{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.PrescriptionMutationResult{}, fmt.Errorf("read prescription: %w", err)
+	}
+	if currentStatus == "finalized" {
+		return domain.PrescriptionMutationResult{}, fmt.Errorf("%w: prescription is already finalized", domain.ErrConflict)
+	}
+
+	command, err := tx.Exec(ctx, `
+		update prescriptions
+		set status = 'finalized',
+			prescribing_veterinarian_user_id = coalesce(prescribing_veterinarian_user_id, $3),
+			shared_with_pet_parent = shared_with_pet_parent or $4,
+			finalized_at = now(),
+			updated_at = now()
+		where tenant_id = $1 and id = $2 and archived_at is null
+	`, tenantID, prescriptionID, uuidOrNil(actorUserID), input.ShareWithPetParent)
+	if err != nil {
+		return domain.PrescriptionMutationResult{}, fmt.Errorf("finalize prescription: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return domain.PrescriptionMutationResult{}, domain.ErrNotFound
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "prescription.finalize", "prescription", prescriptionID, "finalized"); err != nil {
+		return domain.PrescriptionMutationResult{}, err
+	}
+
+	prescription, err := prescriptionByID(ctx, tx, tenantID, prescriptionID)
+	if err != nil {
+		return domain.PrescriptionMutationResult{}, err
+	}
+	result := domain.PrescriptionMutationResult{Prescription: prescription}
+	if err := rememberPrescriptionIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusOK, result); err != nil {
+		return domain.PrescriptionMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.PrescriptionMutationResult{}, fmt.Errorf("commit prescription finalize: %w", err)
+	}
+	return result, nil
+}
+
 func (s PostgresStore) ClinicalNotes(ctx context.Context, tenantID string) ([]domain.ClinicalNote, error) {
 	rows, err := s.pool.Query(ctx, `
 		select
@@ -1800,6 +2019,44 @@ func staffMemberByID(ctx context.Context, q rowQuerier, tenantID string, userID 
 	return item, nil
 }
 
+func prescriptionByID(ctx context.Context, q rowQuerier, tenantID string, prescriptionID string) (domain.Prescription, error) {
+	var item domain.Prescription
+	var medications string
+	var updatedAt time.Time
+	err := q.QueryRow(ctx, `
+		select
+			pr.id::text,
+			p.name,
+			coalesce(g.name, ''),
+			pr.status::text,
+			coalesce(string_agg(pm.medication_name, ', ' order by pm.medication_name), ''),
+			coalesce(pr.instructions, ''),
+			pr.shared_with_pet_parent,
+			pr.updated_at
+		from prescriptions pr
+		join pets p on p.id = pr.pet_id and p.tenant_id = pr.tenant_id
+		left join prescription_medications pm on pm.prescription_id = pr.id
+		left join lateral (
+			select name
+			from pet_guardians
+			where tenant_id = pr.tenant_id and pet_id = pr.pet_id and archived_at is null
+			order by is_primary desc, created_at
+			limit 1
+		) g on true
+		where pr.tenant_id = $1 and pr.id = $2 and pr.archived_at is null
+		group by pr.id, p.name, g.name
+	`, tenantID, prescriptionID).Scan(&item.ID, &item.PetName, &item.OwnerName, &item.Status, &medications, &item.Instructions, &item.SharedWithPetParent, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Prescription{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.Prescription{}, fmt.Errorf("read prescription: %w", err)
+	}
+	item.MedicationNames = splitNames(medications)
+	item.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return item, nil
+}
+
 func formatCents(cents int64) string {
 	sign := ""
 	if cents < 0 {
@@ -2301,6 +2558,36 @@ func idempotentLabOrderResult(ctx context.Context, tx pgx.Tx, tenantID string, k
 	return result, true, nil
 }
 
+func idempotentPrescriptionResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string) (domain.PrescriptionMutationResult, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return domain.PrescriptionMutationResult{}, false, nil
+	}
+
+	var existingHash string
+	var body []byte
+	err := tx.QueryRow(ctx, `
+		select request_hash, response_body
+		from idempotency_keys
+		where tenant_id = $1 and key = $2 and expires_at > now()
+	`, tenantID, key).Scan(&existingHash, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.PrescriptionMutationResult{}, false, nil
+	}
+	if err != nil {
+		return domain.PrescriptionMutationResult{}, false, fmt.Errorf("read idempotency key: %w", err)
+	}
+	if existingHash != requestHash {
+		return domain.PrescriptionMutationResult{}, true, fmt.Errorf("%w: idempotency key was already used with a different request", domain.ErrConflict)
+	}
+	var result domain.PrescriptionMutationResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return domain.PrescriptionMutationResult{}, false, fmt.Errorf("decode idempotent response: %w", err)
+	}
+	result.Idempotent = true
+	return result, true, nil
+}
+
 func idempotentInvoiceResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string) (domain.InvoiceMutationResult, bool, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -2442,6 +2729,26 @@ func rememberPetDocumentIdempotentResult(ctx context.Context, tx pgx.Tx, tenantI
 }
 
 func rememberLabOrderIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.LabOrderMutationResult) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode idempotent response: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		insert into idempotency_keys (tenant_id, key, request_hash, response_status, response_body)
+		values ($1, $2, $3, $4, $5)
+		on conflict (tenant_id, key) do nothing
+	`, tenantID, key, requestHash, status, body)
+	if err != nil {
+		return fmt.Errorf("record idempotency key: %w", err)
+	}
+	return nil
+}
+
+func rememberPrescriptionIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.PrescriptionMutationResult) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil

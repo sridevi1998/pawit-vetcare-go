@@ -153,6 +153,46 @@ type PrescriptionTemplate struct {
 	Instructions string   `json:"instructions"`
 }
 
+type Prescription struct {
+	ID                  string   `json:"id"`
+	PetName             string   `json:"petName"`
+	OwnerName           string   `json:"ownerName"`
+	Status              string   `json:"status"`
+	MedicationNames     []string `json:"medicationNames"`
+	Instructions        string   `json:"instructions,omitempty"`
+	SharedWithPetParent bool     `json:"sharedWithPetParent"`
+	UpdatedAt           string   `json:"updatedAt"`
+}
+
+type PrescriptionMedicationInput struct {
+	MedicationName string `json:"medicationName"`
+	Strength       string `json:"strength,omitempty"`
+	Dosage         string `json:"dosage,omitempty"`
+	Frequency      string `json:"frequency,omitempty"`
+	Duration       string `json:"duration,omitempty"`
+	Route          string `json:"route,omitempty"`
+	Instructions   string `json:"instructions,omitempty"`
+}
+
+type CreatePrescriptionInput struct {
+	LocationID                string                        `json:"locationId"`
+	PetID                     string                        `json:"petId"`
+	AppointmentID             string                        `json:"appointmentId,omitempty"`
+	PrescribingVeterinarianID string                        `json:"prescribingVeterinarianId,omitempty"`
+	Instructions              string                        `json:"instructions,omitempty"`
+	SharedWithPetParent       bool                          `json:"sharedWithPetParent,omitempty"`
+	Medications               []PrescriptionMedicationInput `json:"medications"`
+}
+
+type FinalizePrescriptionInput struct {
+	ShareWithPetParent bool `json:"shareWithPetParent,omitempty"`
+}
+
+type PrescriptionMutationResult struct {
+	Prescription Prescription `json:"prescription"`
+	Idempotent   bool         `json:"idempotent,omitempty"`
+}
+
 type ClinicalNote struct {
 	ID                  string `json:"id"`
 	PetName             string `json:"petName"`

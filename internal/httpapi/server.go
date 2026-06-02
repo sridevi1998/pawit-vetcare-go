@@ -54,6 +54,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/pets/{id}/archive", s.archivePet)
 	s.mux.HandleFunc("POST /api/v1/pets/{id}/documents", s.uploadPetDocument)
 	s.mux.HandleFunc("GET /api/v1/patients", s.patients)
+	s.mux.HandleFunc("GET /api/v1/prescriptions", s.prescriptions)
+	s.mux.HandleFunc("POST /api/v1/prescriptions", s.createPrescription)
+	s.mux.HandleFunc("POST /api/v1/prescriptions/{id}/finalize", s.finalizePrescription)
 	s.mux.HandleFunc("GET /api/v1/prescription-templates", s.prescriptionTemplates)
 	s.mux.HandleFunc("GET /api/v1/clinical-notes", s.clinicalNotes)
 	s.mux.HandleFunc("GET /api/v1/lab-tests", s.labTests)
@@ -336,6 +339,61 @@ func (s *Server) prescriptionTemplates(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
 	items, err := s.store.PrescriptionTemplates(r.Context(), auth.TenantID)
 	writeData(w, map[string]any{"items": items}, err)
+}
+
+func (s *Server) prescriptions(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionPrescriptionView, domain.PermissionPrescriptionViewShared) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot view prescriptions.")
+		return
+	}
+
+	items, err := s.store.Prescriptions(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"items": items}, err)
+}
+
+func (s *Server) createPrescription(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionPrescriptionDraft) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot draft prescriptions.")
+		return
+	}
+
+	var input domain.CreatePrescriptionInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateCreatePrescription(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.CreatePrescription(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
+	writeMutation(w, http.StatusCreated, result, err)
+}
+
+func (s *Server) finalizePrescription(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionPrescriptionFinalize) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot finalize prescriptions.")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Prescription ID is required.")
+		return
+	}
+
+	var input domain.FinalizePrescriptionInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.FinalizePrescription(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), id, input, idempotencyKey(r))
+	writeMutation(w, http.StatusOK, result, err)
 }
 
 func (s *Server) clinicalNotes(w http.ResponseWriter, r *http.Request) {
@@ -646,6 +704,24 @@ func validateUploadPetDocument(input domain.UploadPetDocumentInput) error {
 	}
 	if input.SizeBytes < 0 {
 		return errors.New("sizeBytes must be greater than or equal to 0")
+	}
+	return nil
+}
+
+func validateCreatePrescription(input domain.CreatePrescriptionInput) error {
+	if strings.TrimSpace(input.LocationID) == "" {
+		return errors.New("locationId is required")
+	}
+	if strings.TrimSpace(input.PetID) == "" {
+		return errors.New("petId is required")
+	}
+	if len(input.Medications) == 0 {
+		return errors.New("medications is required")
+	}
+	for _, medication := range input.Medications {
+		if strings.TrimSpace(medication.MedicationName) == "" {
+			return errors.New("medicationName is required")
+		}
 	}
 	return nil
 }

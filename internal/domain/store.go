@@ -19,7 +19,10 @@ type Store interface {
 	CreatePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreatePetInput, idempotencyKey string) (PetMutationResult, error)
 	ArchivePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input ArchivePetInput, idempotencyKey string) (PetMutationResult, error)
 	UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input UploadPetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error)
+	Prescriptions(ctx context.Context, tenantID string) ([]Prescription, error)
 	PrescriptionTemplates(ctx context.Context, tenantID string) ([]PrescriptionTemplate, error)
+	CreatePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreatePrescriptionInput, idempotencyKey string) (PrescriptionMutationResult, error)
+	FinalizePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole Role, prescriptionID string, input FinalizePrescriptionInput, idempotencyKey string) (PrescriptionMutationResult, error)
 	ClinicalNotes(ctx context.Context, tenantID string) ([]ClinicalNote, error)
 	LabTests(ctx context.Context, tenantID string) ([]LabTest, error)
 	CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateLabOrderInput, idempotencyKey string) (LabOrderMutationResult, error)
@@ -234,6 +237,39 @@ func (DemoStore) PrescriptionTemplates(ctx context.Context, tenantID string) ([]
 		{ID: "rx_001", Name: "Canine Dermatitis", Condition: "Skin irritation", Category: "Dermatology", Medications: []string{"Chlorhexidine shampoo", "Cetirizine - weight based"}, Instructions: "Avoid self-medication. Recheck if itching persists beyond 5 days."},
 		{ID: "rx_002", Name: "Deworming", Condition: "Parasite prevention", Category: "Preventive Care", Medications: []string{"Praziquantel/Pyrantel - weight based"}, Instructions: "Dose by current body weight. Repeat as advised by veterinarian."},
 	}, nil
+}
+
+func (DemoStore) Prescriptions(ctx context.Context, tenantID string) ([]Prescription, error) {
+	return []Prescription{
+		{ID: "rx_draft_001", PetName: "Bruno", OwnerName: "Jordan Ellis", Status: "draft", MedicationNames: []string{"Cetirizine"}, Instructions: "Draft pending veterinarian review.", SharedWithPetParent: false, UpdatedAt: "2026-05-12T14:00:00Z"},
+	}, nil
+}
+
+func (DemoStore) CreatePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreatePrescriptionInput, idempotencyKey string) (PrescriptionMutationResult, error) {
+	medications := make([]string, 0, len(input.Medications))
+	for _, medication := range input.Medications {
+		medications = append(medications, medication.MedicationName)
+	}
+	return PrescriptionMutationResult{Prescription: Prescription{
+		ID:                  "rx_demo_created",
+		PetName:             "Demo Pet",
+		OwnerName:           "Demo Guardian",
+		Status:              "draft",
+		MedicationNames:     medications,
+		Instructions:        input.Instructions,
+		SharedWithPetParent: input.SharedWithPetParent,
+	}}, nil
+}
+
+func (DemoStore) FinalizePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole Role, prescriptionID string, input FinalizePrescriptionInput, idempotencyKey string) (PrescriptionMutationResult, error) {
+	return PrescriptionMutationResult{Prescription: Prescription{
+		ID:                  prescriptionID,
+		PetName:             "Demo Pet",
+		OwnerName:           "Demo Guardian",
+		Status:              "finalized",
+		MedicationNames:     []string{"Demo medication"},
+		SharedWithPetParent: input.ShareWithPetParent,
+	}}, nil
 }
 
 func (DemoStore) ClinicalNotes(ctx context.Context, tenantID string) ([]ClinicalNote, error) {

@@ -71,4 +71,4 @@ The Cloud Run migration job manifest is in `deployments/cloud-run/migration-job.
 
 ## Next Persistence Step
 
-Add write repositories and idempotent mutation endpoints for prescriptions and remaining document workflows.
+Add write repositories and idempotent mutation endpoints for remaining document workflows.
