@@ -60,8 +60,8 @@ All application endpoints require:
 ## Next Contract Slice
 
 - Generate frontend TypeScript clients from OpenAPI
-- Add idempotency-key support to the remaining mutation endpoints
 
 ## Contract Test Coverage
 
 The API repo includes hospital-portal response contract tests for stable read endpoint shapes in `internal/httpapi/contract_test.go`.
+Mutation handler tests cover `Idempotency-Key` forwarding for every POST mutation endpoint.

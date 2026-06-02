@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -696,6 +697,267 @@ func TestCreateStaffRejectsReceptionist(t *testing.T) {
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
 	}
+}
+
+func TestMutationEndpointsForwardIdempotencyKey(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		body string
+		role domain.Role
+		call string
+	}{
+		{
+			name: "create appointment",
+			path: "/api/v1/appointments",
+			body: `{"locationId":"loc_001","petId":"pet_001","type":"in_clinic","reason":"Wellness visit"}`,
+			role: domain.RoleReceptionist,
+			call: "CreateAppointment",
+		},
+		{
+			name: "cancel appointment",
+			path: "/api/v1/appointments/apt_001/cancel",
+			body: `{"reason":"guardian requested cancellation"}`,
+			role: domain.RoleReceptionist,
+			call: "CancelAppointment",
+		},
+		{
+			name: "register walk in",
+			path: "/api/v1/queue/walk-ins",
+			body: `{"locationId":"loc_001","petId":"pet_001","reason":"Walk-in limping","priority":"urgent"}`,
+			role: domain.RoleReceptionist,
+			call: "RegisterWalkIn",
+		},
+		{
+			name: "call queue entry",
+			path: "/api/v1/queue/queue_001/call",
+			body: `{}`,
+			role: domain.RoleReceptionist,
+			call: "UpdateQueueStatus:called",
+		},
+		{
+			name: "start queue entry",
+			path: "/api/v1/queue/queue_001/start",
+			body: `{}`,
+			role: domain.RoleReceptionist,
+			call: "UpdateQueueStatus:in_progress",
+		},
+		{
+			name: "complete queue entry",
+			path: "/api/v1/queue/queue_001/complete",
+			body: `{}`,
+			role: domain.RoleVeterinarian,
+			call: "UpdateQueueStatus:completed",
+		},
+		{
+			name: "cancel queue entry",
+			path: "/api/v1/queue/queue_001/cancel",
+			body: `{}`,
+			role: domain.RoleReceptionist,
+			call: "UpdateQueueStatus:cancelled",
+		},
+		{
+			name: "create pet",
+			path: "/api/v1/pets",
+			body: `{"locationId":"loc_001","name":"Nala","species":"cat","guardianName":"Avery Parker","guardianEmail":"avery@example.com"}`,
+			role: domain.RolePetParent,
+			call: "CreatePet",
+		},
+		{
+			name: "archive pet",
+			path: "/api/v1/pets/pet_001/archive",
+			body: `{"reason":"duplicate record"}`,
+			role: domain.RoleReceptionist,
+			call: "ArchivePet",
+		},
+		{
+			name: "upload pet document",
+			path: "/api/v1/pets/pet_001/documents",
+			body: `{"title":"Rabies certificate","documentType":"vaccine_history","objectPath":"tenant_test/pets/pet_001/rabies.pdf","contentType":"application/pdf","sizeBytes":1024}`,
+			role: domain.RoleReceptionist,
+			call: "UploadPetDocument",
+		},
+		{
+			name: "archive pet document",
+			path: "/api/v1/pets/pet_001/documents/doc_001/archive",
+			body: `{"reason":"duplicate upload"}`,
+			role: domain.RoleReceptionist,
+			call: "ArchivePetDocument",
+		},
+		{
+			name: "create prescription",
+			path: "/api/v1/prescriptions",
+			body: `{"locationId":"loc_001","petId":"pet_001","instructions":"Give with food.","medications":[{"medicationName":"Cetirizine"}]}`,
+			role: domain.RoleVetTechnician,
+			call: "CreatePrescription",
+		},
+		{
+			name: "finalize prescription",
+			path: "/api/v1/prescriptions/rx_001/finalize",
+			body: `{"shareWithPetParent":true}`,
+			role: domain.RoleVeterinarian,
+			call: "FinalizePrescription",
+		},
+		{
+			name: "create lab order",
+			path: "/api/v1/lab-tests",
+			body: `{"locationId":"loc_001","petId":"pet_001","testType":"CBC","sampleType":"blood","priority":"normal"}`,
+			role: domain.RoleVeterinarian,
+			call: "CreateLabOrder",
+		},
+		{
+			name: "update lab order status",
+			path: "/api/v1/lab-tests/lab_001/status",
+			body: `{"status":"in_progress"}`,
+			role: domain.RoleLabTechnician,
+			call: "UpdateLabOrderStatus",
+		},
+		{
+			name: "upload lab result",
+			path: "/api/v1/lab-tests/lab_001/report",
+			body: `{"resultNotes":"Normal CBC","reportObjectPath":"tenant/labs/cbc.pdf","shareWithPetParent":true,"markOrderCompleted":true}`,
+			role: domain.RoleVeterinarian,
+			call: "UploadLabResult",
+		},
+		{
+			name: "create invoice",
+			path: "/api/v1/billing/invoices",
+			body: `{"locationId":"loc_001","petId":"pet_001","lineItems":[{"description":"Wellness exam","quantity":1,"unitAmountCents":6500}]}`,
+			role: domain.RoleReceptionist,
+			call: "CreateInvoice",
+		},
+		{
+			name: "void invoice",
+			path: "/api/v1/billing/invoices/inv_001/void",
+			body: `{"reason":"billing error"}`,
+			role: domain.RoleClinicAdmin,
+			call: "VoidInvoice",
+		},
+		{
+			name: "create staff",
+			path: "/api/v1/staff",
+			body: `{"name":"Priya Shah","email":"priya@pawit.example","role":"Receptionist"}`,
+			role: domain.RoleClinicAdmin,
+			call: "CreateStaff",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newIdempotencyRecordingStore()
+			server := NewServer(testConfig(), store)
+			request := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+			request.Header.Set("X-PawIt-Role", string(tt.role))
+			request.Header.Set("Idempotency-Key", " idem-key-001 ")
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, request)
+
+			if response.Code < http.StatusOK || response.Code >= http.StatusMultipleChoices {
+				t.Fatalf("expected success status, got %d: %s", response.Code, response.Body.String())
+			}
+			if got := store.keys[tt.call]; got != "idem-key-001" {
+				t.Fatalf("expected %s to receive idempotency key %q, got %q", tt.call, "idem-key-001", got)
+			}
+		})
+	}
+}
+
+type idempotencyRecordingStore struct {
+	domain.DemoStore
+	keys map[string]string
+}
+
+func newIdempotencyRecordingStore() *idempotencyRecordingStore {
+	return &idempotencyRecordingStore{
+		DemoStore: domain.NewDemoStore(),
+		keys:      map[string]string{},
+	}
+}
+
+func (s *idempotencyRecordingStore) record(name string, key string) {
+	s.keys[name] = key
+}
+
+func (s *idempotencyRecordingStore) CreateAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateAppointmentInput, idempotencyKey string) (domain.AppointmentMutationResult, error) {
+	s.record("CreateAppointment", idempotencyKey)
+	return s.DemoStore.CreateAppointment(ctx, tenantID, actorUserID, actorRole, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) CancelAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, appointmentID string, input domain.CancelAppointmentInput, idempotencyKey string) (domain.AppointmentMutationResult, error) {
+	s.record("CancelAppointment", idempotencyKey)
+	return s.DemoStore.CancelAppointment(ctx, tenantID, actorUserID, actorRole, appointmentID, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) RegisterWalkIn(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.RegisterWalkInInput, idempotencyKey string) (domain.QueueMutationResult, error) {
+	s.record("RegisterWalkIn", idempotencyKey)
+	return s.DemoStore.RegisterWalkIn(ctx, tenantID, actorUserID, actorRole, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) UpdateQueueStatus(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, queueID string, status domain.QueueStatus, input domain.UpdateQueueInput, idempotencyKey string) (domain.QueueMutationResult, error) {
+	s.record("UpdateQueueStatus:"+string(status), idempotencyKey)
+	return s.DemoStore.UpdateQueueStatus(ctx, tenantID, actorUserID, actorRole, queueID, status, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) CreatePet(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreatePetInput, idempotencyKey string) (domain.PetMutationResult, error) {
+	s.record("CreatePet", idempotencyKey)
+	return s.DemoStore.CreatePet(ctx, tenantID, actorUserID, actorRole, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) ArchivePet(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, input domain.ArchivePetInput, idempotencyKey string) (domain.PetMutationResult, error) {
+	s.record("ArchivePet", idempotencyKey)
+	return s.DemoStore.ArchivePet(ctx, tenantID, actorUserID, actorRole, petID, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, input domain.UploadPetDocumentInput, idempotencyKey string) (domain.PetDocumentMutationResult, error) {
+	s.record("UploadPetDocument", idempotencyKey)
+	return s.DemoStore.UploadPetDocument(ctx, tenantID, actorUserID, actorRole, petID, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) ArchivePetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, documentID string, input domain.ArchivePetDocumentInput, idempotencyKey string) (domain.PetDocumentMutationResult, error) {
+	s.record("ArchivePetDocument", idempotencyKey)
+	return s.DemoStore.ArchivePetDocument(ctx, tenantID, actorUserID, actorRole, petID, documentID, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) CreatePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreatePrescriptionInput, idempotencyKey string) (domain.PrescriptionMutationResult, error) {
+	s.record("CreatePrescription", idempotencyKey)
+	return s.DemoStore.CreatePrescription(ctx, tenantID, actorUserID, actorRole, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) FinalizePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, prescriptionID string, input domain.FinalizePrescriptionInput, idempotencyKey string) (domain.PrescriptionMutationResult, error) {
+	s.record("FinalizePrescription", idempotencyKey)
+	return s.DemoStore.FinalizePrescription(ctx, tenantID, actorUserID, actorRole, prescriptionID, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateLabOrderInput, idempotencyKey string) (domain.LabOrderMutationResult, error) {
+	s.record("CreateLabOrder", idempotencyKey)
+	return s.DemoStore.CreateLabOrder(ctx, tenantID, actorUserID, actorRole, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) UpdateLabOrderStatus(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, labOrderID string, input domain.UpdateLabOrderStatusInput, idempotencyKey string) (domain.LabOrderMutationResult, error) {
+	s.record("UpdateLabOrderStatus", idempotencyKey)
+	return s.DemoStore.UpdateLabOrderStatus(ctx, tenantID, actorUserID, actorRole, labOrderID, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) UploadLabResult(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, labOrderID string, input domain.UploadLabResultInput, idempotencyKey string) (domain.LabOrderMutationResult, error) {
+	s.record("UploadLabResult", idempotencyKey)
+	return s.DemoStore.UploadLabResult(ctx, tenantID, actorUserID, actorRole, labOrderID, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) CreateInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateInvoiceInput, idempotencyKey string) (domain.InvoiceMutationResult, error) {
+	s.record("CreateInvoice", idempotencyKey)
+	return s.DemoStore.CreateInvoice(ctx, tenantID, actorUserID, actorRole, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) VoidInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, invoiceID string, input domain.VoidInvoiceInput, idempotencyKey string) (domain.InvoiceMutationResult, error) {
+	s.record("VoidInvoice", idempotencyKey)
+	return s.DemoStore.VoidInvoice(ctx, tenantID, actorUserID, actorRole, invoiceID, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) CreateStaff(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateStaffInput, idempotencyKey string) (domain.StaffMutationResult, error) {
+	s.record("CreateStaff", idempotencyKey)
+	return s.DemoStore.CreateStaff(ctx, tenantID, actorUserID, actorRole, input, idempotencyKey)
 }
 
 func hasPermission(policy domain.RolePolicy, permission domain.Permission) bool {

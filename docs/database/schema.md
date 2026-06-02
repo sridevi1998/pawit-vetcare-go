@@ -71,4 +71,4 @@ The Cloud Run migration job manifest is in `deployments/cloud-run/migration-job.
 
 ## Next Integration Step
 
-Add shared contract tests for API responses used by the hospital portal and generate frontend clients from the OpenAPI source of truth.
+Generate frontend clients from the OpenAPI source of truth.
