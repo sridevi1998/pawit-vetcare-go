@@ -61,4 +61,7 @@ All application endpoints require:
 
 - Generate frontend TypeScript clients from OpenAPI
 - Add idempotency-key support to the remaining mutation endpoints
-- Add shared contract tests for API responses used by the hospital portal
+
+## Contract Test Coverage
+
+The API repo includes hospital-portal response contract tests for stable read endpoint shapes in `internal/httpapi/contract_test.go`.
