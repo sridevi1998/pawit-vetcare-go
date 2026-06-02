@@ -67,6 +67,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/feedback", s.feedback)
 	s.mux.HandleFunc("GET /api/v1/doctors", s.doctors)
 	s.mux.HandleFunc("GET /api/v1/staff", s.staff)
+	s.mux.HandleFunc("POST /api/v1/staff", s.createStaff)
 	s.mux.HandleFunc("/", s.notFound)
 }
 
@@ -506,6 +507,27 @@ func (s *Server) staff(w http.ResponseWriter, r *http.Request) {
 	writeData(w, map[string]any{"items": items}, err)
 }
 
+func (s *Server) createStaff(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionStaffManage) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot manage staff.")
+		return
+	}
+
+	var input domain.CreateStaffInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateCreateStaff(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.CreateStaff(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
+	writeMutation(w, http.StatusCreated, result, err)
+}
+
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "not_found", "The requested PawIt endpoint does not exist.")
 }
@@ -693,6 +715,22 @@ func validateCreateInvoice(input domain.CreateInvoiceInput) error {
 	return nil
 }
 
+func validateCreateStaff(input domain.CreateStaffInput) error {
+	if strings.TrimSpace(input.Name) == "" {
+		return errors.New("name is required")
+	}
+	if strings.TrimSpace(input.Email) == "" {
+		return errors.New("email is required")
+	}
+	if !strings.Contains(input.Email, "@") {
+		return errors.New("email must be valid")
+	}
+	if !validStaffRole(input.Role) {
+		return errors.New("role is not supported for staff management")
+	}
+	return nil
+}
+
 func validAppointmentType(value domain.AppointmentType) bool {
 	for _, item := range domain.PawItProductSpec().SupportedAppointmentTypes {
 		if item == value {
@@ -718,6 +756,15 @@ func validLabStatus(value domain.LabOrderStatus) bool {
 		}
 	}
 	return false
+}
+
+func validStaffRole(value domain.Role) bool {
+	switch value {
+	case domain.RoleClinicAdmin, domain.RoleVeterinarian, domain.RoleReceptionist, domain.RoleVetTechnician, domain.RoleLabTechnician:
+		return true
+	default:
+		return false
+	}
 }
 
 func roleCan(role string, permissions ...domain.Permission) bool {

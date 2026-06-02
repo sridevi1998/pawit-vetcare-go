@@ -248,6 +248,18 @@ type Person struct {
 	Status    string `json:"status"`
 }
 
+type CreateStaffInput struct {
+	Name              string `json:"name"`
+	Email             string `json:"email"`
+	Role              Role   `json:"role"`
+	DefaultLocationID string `json:"defaultLocationId,omitempty"`
+}
+
+type StaffMutationResult struct {
+	StaffMember Person `json:"staffMember"`
+	Idempotent  bool   `json:"idempotent,omitempty"`
+}
+
 type Feedback struct {
 	ID        string `json:"id"`
 	PetName   string `json:"petName"`

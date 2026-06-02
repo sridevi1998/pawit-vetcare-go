@@ -32,6 +32,7 @@ type Store interface {
 	Feedback(ctx context.Context, tenantID string) (map[string]any, error)
 	Doctors(ctx context.Context, tenantID string) ([]Person, error)
 	Staff(ctx context.Context, tenantID string) ([]Person, error)
+	CreateStaff(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateStaffInput, idempotencyKey string) (StaffMutationResult, error)
 }
 
 type DemoStore struct{}
@@ -372,4 +373,14 @@ func (DemoStore) Staff(ctx context.Context, tenantID string) ([]Person, error) {
 		{ID: "staff_002", Name: "Chai P", Role: string(RoleReceptionist), Email: "chai@pawit.care", Status: "active"},
 		{ID: "staff_003", Name: "Anika", Role: string(RoleVetTechnician), Email: "anika@pawit.care", Status: "active"},
 	}, nil
+}
+
+func (DemoStore) CreateStaff(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateStaffInput, idempotencyKey string) (StaffMutationResult, error) {
+	return StaffMutationResult{StaffMember: Person{
+		ID:     "staff_demo_created",
+		Name:   input.Name,
+		Role:   string(input.Role),
+		Email:  input.Email,
+		Status: "invited",
+	}}, nil
 }

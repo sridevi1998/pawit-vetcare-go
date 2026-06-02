@@ -50,10 +50,11 @@ All application endpoints require:
 | `GET` | `/feedback` | Reviews and rating distribution |
 | `GET` | `/doctors` | Veterinarian management |
 | `GET` | `/staff` | Staff management |
+| `POST` | `/staff` | Invite or reactivate a tenant staff member and assign a staff role |
 
 ## Next Contract Slice
 
 - Generate frontend TypeScript clients from OpenAPI
-- Expand PostgreSQL repositories with create/update workflows for staff, prescriptions, and remaining documents
+- Expand PostgreSQL repositories with create/update workflows for prescriptions and remaining document workflows
 - Add idempotency-key support to the remaining mutation endpoints
 - Add shared contract tests for API responses used by the hospital portal

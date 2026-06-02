@@ -504,6 +504,50 @@ func TestVoidInvoiceRequiresReason(t *testing.T) {
 	}
 }
 
+func TestCreateStaffAllowsClinicAdmin(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"name":"Priya Shah","email":"priya@pawit.example","role":"Receptionist"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/staff", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleClinicAdmin))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, response.Code, response.Body.String())
+	}
+
+	var payload domain.StaffMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.StaffMember.Email != "priya@pawit.example" {
+		t.Fatalf("expected staff email, got %q", payload.StaffMember.Email)
+	}
+	if payload.StaffMember.Role != string(domain.RoleReceptionist) {
+		t.Fatalf("expected receptionist role, got %q", payload.StaffMember.Role)
+	}
+	if payload.StaffMember.Status != "invited" {
+		t.Fatalf("expected invited status, got %q", payload.StaffMember.Status)
+	}
+}
+
+func TestCreateStaffRejectsReceptionist(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"name":"Priya Shah","email":"priya@pawit.example","role":"Receptionist"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/staff", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
 func hasPermission(policy domain.RolePolicy, permission domain.Permission) bool {
 	for _, item := range policy.Permissions {
 		if item == permission {

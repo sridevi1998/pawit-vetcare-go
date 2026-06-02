@@ -1525,6 +1525,100 @@ func (s PostgresStore) Staff(ctx context.Context, tenantID string) ([]domain.Per
 	return items, nil
 }
 
+func (s PostgresStore) CreateStaff(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateStaffInput, idempotencyKey string) (domain.StaffMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionStaffManage) {
+		return domain.StaffMutationResult{}, domain.ErrForbidden
+	}
+	if !validManagedStaffRole(input.Role) {
+		return domain.StaffMutationResult{}, fmt.Errorf("%w: role is not supported for staff management", domain.ErrValidation)
+	}
+	if strings.TrimSpace(input.DefaultLocationID) != "" && !isUUID(input.DefaultLocationID) {
+		return domain.StaffMutationResult{}, fmt.Errorf("%w: defaultLocationId must be a UUID", domain.ErrValidation)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.StaffMutationResult{}, fmt.Errorf("begin staff create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(input)
+	if result, ok, err := idempotentStaffResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	email := strings.ToLower(strings.TrimSpace(input.Email))
+	name := strings.TrimSpace(input.Name)
+	roleCode := string(input.Role)
+
+	var roleID string
+	err = tx.QueryRow(ctx, "select id::text from roles where code = $1", roleCode).Scan(&roleID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.StaffMutationResult{}, fmt.Errorf("%w: role is not configured", domain.ErrValidation)
+	}
+	if err != nil {
+		return domain.StaffMutationResult{}, fmt.Errorf("read staff role: %w", err)
+	}
+
+	var userID string
+	err = tx.QueryRow(ctx, `
+		insert into users (email, password_hash, display_name, status)
+		values ($1, 'invited:pending', $2, 'invited')
+		on conflict (email_normalized) do update
+		set display_name = excluded.display_name,
+			archived_at = null,
+			updated_at = now()
+		returning id::text
+	`, email, name).Scan(&userID)
+	if err != nil {
+		return domain.StaffMutationResult{}, fmt.Errorf("create staff user: %w", err)
+	}
+
+	var membershipID string
+	err = tx.QueryRow(ctx, `
+		insert into tenant_memberships (tenant_id, user_id, default_location_id, status)
+		values ($1, $2, $3, 'invited')
+		on conflict (tenant_id, user_id) do update
+		set default_location_id = coalesce(excluded.default_location_id, tenant_memberships.default_location_id),
+			status = case
+				when tenant_memberships.status = 'archived' then 'invited'::user_status
+				else tenant_memberships.status
+			end,
+			archived_at = null,
+			updated_at = now()
+		returning id::text
+	`, tenantID, userID, uuidOrNil(input.DefaultLocationID)).Scan(&membershipID)
+	if err != nil {
+		return domain.StaffMutationResult{}, fmt.Errorf("create staff membership: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		insert into membership_roles (membership_id, role_id)
+		values ($1, $2)
+		on conflict do nothing
+	`, membershipID, roleID); err != nil {
+		return domain.StaffMutationResult{}, fmt.Errorf("assign staff role: %w", err)
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "staff.create", "user", userID, roleCode); err != nil {
+		return domain.StaffMutationResult{}, err
+	}
+
+	staffMember, err := staffMemberByID(ctx, tx, tenantID, userID, roleCode)
+	if err != nil {
+		return domain.StaffMutationResult{}, err
+	}
+	result := domain.StaffMutationResult{StaffMember: staffMember}
+	if err := rememberStaffIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusCreated, result); err != nil {
+		return domain.StaffMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.StaffMutationResult{}, fmt.Errorf("commit staff create: %w", err)
+	}
+	return result, nil
+}
+
 func (s PostgresStore) count(ctx context.Context, query string, tenantID string) (int64, error) {
 	var value int64
 	if err := s.pool.QueryRow(ctx, query, tenantID).Scan(&value); err != nil {
@@ -1676,6 +1770,34 @@ func (s PostgresStore) people(ctx context.Context, tenantID string, role string)
 		return nil, fmt.Errorf("iterate people: %w", err)
 	}
 	return items, nil
+}
+
+func staffMemberByID(ctx context.Context, q rowQuerier, tenantID string, userID string, roleCode string) (domain.Person, error) {
+	var item domain.Person
+	err := q.QueryRow(ctx, `
+		select
+			u.id::text,
+			u.display_name,
+			r.code,
+			case when r.code = 'Veterinarian' then 'Small Animal Medicine' else '' end,
+			u.email,
+			m.status::text
+		from tenant_memberships m
+		join users u on u.id = m.user_id
+		join membership_roles mr on mr.membership_id = m.id
+		join roles r on r.id = mr.role_id
+		where m.tenant_id = $1
+			and u.id = $2
+			and r.code = $3
+			and m.archived_at is null
+	`, tenantID, userID, roleCode).Scan(&item.ID, &item.Name, &item.Role, &item.Specialty, &item.Email, &item.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Person{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.Person{}, fmt.Errorf("read staff member: %w", err)
+	}
+	return item, nil
 }
 
 func formatCents(cents int64) string {
@@ -1917,6 +2039,15 @@ func roleHasAny(role domain.Role, permissions ...domain.Permission) bool {
 		}
 	}
 	return false
+}
+
+func validManagedStaffRole(role domain.Role) bool {
+	switch role {
+	case domain.RoleClinicAdmin, domain.RoleVeterinarian, domain.RoleReceptionist, domain.RoleVetTechnician, domain.RoleLabTechnician:
+		return true
+	default:
+		return false
+	}
 }
 
 func validQueueStatus(status domain.QueueStatus) bool {
@@ -2200,6 +2331,36 @@ func idempotentInvoiceResult(ctx context.Context, tx pgx.Tx, tenantID string, ke
 	return result, true, nil
 }
 
+func idempotentStaffResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string) (domain.StaffMutationResult, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return domain.StaffMutationResult{}, false, nil
+	}
+
+	var existingHash string
+	var body []byte
+	err := tx.QueryRow(ctx, `
+		select request_hash, response_body
+		from idempotency_keys
+		where tenant_id = $1 and key = $2 and expires_at > now()
+	`, tenantID, key).Scan(&existingHash, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.StaffMutationResult{}, false, nil
+	}
+	if err != nil {
+		return domain.StaffMutationResult{}, false, fmt.Errorf("read idempotency key: %w", err)
+	}
+	if existingHash != requestHash {
+		return domain.StaffMutationResult{}, true, fmt.Errorf("%w: idempotency key was already used with a different request", domain.ErrConflict)
+	}
+	var result domain.StaffMutationResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return domain.StaffMutationResult{}, false, fmt.Errorf("decode idempotent response: %w", err)
+	}
+	result.Idempotent = true
+	return result, true, nil
+}
+
 func rememberIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.AppointmentMutationResult) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -2301,6 +2462,26 @@ func rememberLabOrderIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID s
 }
 
 func rememberInvoiceIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.InvoiceMutationResult) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode idempotent response: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		insert into idempotency_keys (tenant_id, key, request_hash, response_status, response_body)
+		values ($1, $2, $3, $4, $5)
+		on conflict (tenant_id, key) do nothing
+	`, tenantID, key, requestHash, status, body)
+	if err != nil {
+		return fmt.Errorf("record idempotency key: %w", err)
+	}
+	return nil
+}
+
+func rememberStaffIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.StaffMutationResult) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil
