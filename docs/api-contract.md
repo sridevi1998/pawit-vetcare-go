@@ -35,7 +35,9 @@ All application endpoints require:
 | `GET` | `/pets` | Pet and pet-parent records |
 | `POST` | `/pets` | Create a dog/cat pet record with first guardian |
 | `POST` | `/pets/{id}/archive` | Archive a pet record with audit reason |
+| `GET` | `/pets/{id}/documents` | List active document metadata for a pet |
 | `POST` | `/pets/{id}/documents` | Register uploaded pet document metadata |
+| `POST` | `/pets/{id}/documents/{documentId}/archive` | Archive pet document metadata with an audit reason |
 | `GET` | `/patients` | Pet and pet-parent records |
 | `GET` | `/prescriptions` | Tenant prescription drafts and finalized prescriptions |
 | `POST` | `/prescriptions` | Create a prescription draft with medication lines |
@@ -58,6 +60,5 @@ All application endpoints require:
 ## Next Contract Slice
 
 - Generate frontend TypeScript clients from OpenAPI
-- Expand PostgreSQL repositories with create/update workflows for remaining document workflows
 - Add idempotency-key support to the remaining mutation endpoints
 - Add shared contract tests for API responses used by the hospital portal

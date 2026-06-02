@@ -18,7 +18,9 @@ type Store interface {
 	Patients(ctx context.Context, tenantID string) ([]PatientRecord, error)
 	CreatePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreatePetInput, idempotencyKey string) (PetMutationResult, error)
 	ArchivePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input ArchivePetInput, idempotencyKey string) (PetMutationResult, error)
+	PetDocuments(ctx context.Context, tenantID string, petID string) ([]PetDocument, error)
 	UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input UploadPetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error)
+	ArchivePetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, documentID string, input ArchivePetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error)
 	Prescriptions(ctx context.Context, tenantID string) ([]Prescription, error)
 	PrescriptionTemplates(ctx context.Context, tenantID string) ([]PrescriptionTemplate, error)
 	CreatePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreatePrescriptionInput, idempotencyKey string) (PrescriptionMutationResult, error)
@@ -219,6 +221,12 @@ func (DemoStore) ArchivePet(ctx context.Context, tenantID string, actorUserID st
 	return PetMutationResult{Pet: PatientRecord{ID: petID, PetName: "Archived Demo Pet"}}, nil
 }
 
+func (DemoStore) PetDocuments(ctx context.Context, tenantID string, petID string) ([]PetDocument, error) {
+	return []PetDocument{
+		{ID: "doc_001", PetID: petID, Title: "Rabies certificate", DocumentType: "vaccine_history", ObjectPath: "tenant_demo/pets/doc_001/rabies.pdf", ContentType: "application/pdf", SizeBytes: 1024, Status: "active", CreatedAt: "2026-05-12T10:00:00Z"},
+	}, nil
+}
+
 func (DemoStore) UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input UploadPetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error) {
 	return PetDocumentMutationResult{Document: PetDocument{
 		ID:           "doc_demo_created",
@@ -229,6 +237,15 @@ func (DemoStore) UploadPetDocument(ctx context.Context, tenantID string, actorUs
 		ContentType:  input.ContentType,
 		SizeBytes:    input.SizeBytes,
 		Status:       "active",
+	}}, nil
+}
+
+func (DemoStore) ArchivePetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, documentID string, input ArchivePetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error) {
+	return PetDocumentMutationResult{Document: PetDocument{
+		ID:     documentID,
+		PetID:  petID,
+		Title:  "Archived demo document",
+		Status: "archived",
 	}}, nil
 }
 

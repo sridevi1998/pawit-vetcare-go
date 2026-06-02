@@ -154,6 +154,69 @@ func TestUploadPetDocumentAllowsReceptionist(t *testing.T) {
 	}
 }
 
+func TestPetDocumentsAllowsReceptionist(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/pets/pet_001/documents", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	var payload struct {
+		Items []domain.PetDocument `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Items) == 0 {
+		t.Fatal("expected at least one pet document")
+	}
+	if payload.Items[0].PetID != "pet_001" {
+		t.Fatalf("expected pet_001 document, got %q", payload.Items[0].PetID)
+	}
+}
+
+func TestArchivePetDocumentAllowsRecordManager(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/pets/pet_001/documents/doc_001/archive", strings.NewReader(`{"reason":"duplicate upload"}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	var payload domain.PetDocumentMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Document.Status != "archived" {
+		t.Fatalf("expected archived document, got %q", payload.Document.Status)
+	}
+}
+
+func TestArchivePetDocumentRejectsPetParent(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/pets/pet_001/documents/doc_001/archive", strings.NewReader(`{"reason":"duplicate upload"}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RolePetParent))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
 func TestCreatePrescriptionAllowsVetTechnicianDraft(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	body := `{
