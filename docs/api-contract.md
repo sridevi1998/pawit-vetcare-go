@@ -59,7 +59,7 @@ All application endpoints require:
 
 ## Next Contract Slice
 
-- Generate frontend TypeScript clients from OpenAPI
+- Harden the OpenAPI source with operation IDs, tag descriptions, documented 4XX responses, and Redocly metadata cleanup.
 
 ## Contract Test Coverage
 

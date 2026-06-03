@@ -89,6 +89,18 @@ The production container includes `/app/pawit-migrate` for Cloud Run migration j
 
 When `PAWIT_DATABASE_URL` is set, the API uses PostgreSQL for tenant-scoped reads. Without it, local development uses the in-memory demo store so frontend screens can be built before a database is running. The optional local seed file lives at [docs/database/local-dev-seed.sql](docs/database/local-dev-seed.sql).
 
+## Local Verification
+
+```sh
+test -z "$(gofmt -l .)"
+go test ./...
+go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+docker build -t pawit-vetcare-api:local .
+```
+
+CI also runs a Trivy HIGH/CRITICAL filesystem scan.
+
 ## Database Direction
 
 PawIt VetCare is PostgreSQL-first. PostgreSQL is the source of truth for tenants, users, RBAC, pets, appointments, clinical records, labs, billing, payments, audit logs, and idempotent mutations.
