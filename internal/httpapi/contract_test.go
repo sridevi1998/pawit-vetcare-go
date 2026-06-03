@@ -72,6 +72,13 @@ func TestHospitalPortalReadResponseContracts(t *testing.T) {
 			itemKeys:  []string{"id", "petName", "ownerName", "species", "documentsCount"},
 		},
 		{
+			name:      "pet documents",
+			path:      "/api/v1/pets/pet_001/documents",
+			topKeys:   []string{"items"},
+			listField: "items",
+			itemKeys:  []string{"id", "petId", "title", "documentType", "objectPath", "contentType", "sizeBytes", "status", "createdAt"},
+		},
+		{
 			name:      "prescriptions",
 			path:      "/api/v1/prescriptions",
 			role:      domain.RoleVeterinarian,

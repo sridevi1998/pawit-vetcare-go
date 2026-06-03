@@ -6,11 +6,11 @@ PawIt VetCare mirrors the Docran product shape but adapts workflows for veterina
 
 | Repository | Runtime | Purpose |
 | --- | --- | --- |
-| `pawit-vetcare-api` | Go 1.22 on Cloud Run | Multi-tenant API, auth, RBAC, veterinary HMS domain, billing, diagnostics, AI advisory orchestration |
+| `pawit-vetcare-api` | Go 1.26.4 on Cloud Run | Multi-tenant API, auth, RBAC, veterinary HMS domain, billing, diagnostics, AI advisory orchestration |
 | `pawit-vetcare-hospital` | Next.js 15, React 19, TypeScript, Tailwind CSS | Vet clinic staff portal matching the Docran-style operational UI |
 | `pawit-vetcare-pet-parent` | Vite 7, React 19, Capacitor, i18next, Tailwind CSS | Pet parent web/mobile portal |
 | `pawit-vetcare-marketing` | Next.js 16, React 19, Tailwind v4, Radix UI, Framer Motion | Public website |
-| `pawit-vetcare-booking-bff` | Go 1.22 on Cloud Run | Public booking API boundary for appointment search and booking |
+| `pawit-vetcare-booking-bff` | Go 1.26.4 on Cloud Run | Public booking API boundary for appointment search and booking |
 | `pawit-vetcare-contracts` | TypeScript package and OpenAPI | Shared API contracts for frontend type safety |
 | `pawit-vetcare-infra` | Terraform | GCP Cloud Run, Cloud SQL, Memorystore, Artifact Registry, Secret Manager, IAM, load balancer |
 
