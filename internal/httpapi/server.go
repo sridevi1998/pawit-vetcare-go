@@ -73,6 +73,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/doctors", s.doctors)
 	s.mux.HandleFunc("GET /api/v1/staff", s.staff)
 	s.mux.HandleFunc("POST /api/v1/staff", s.createStaff)
+	s.mux.HandleFunc("GET /api/v1/audit-logs", s.auditLogs)
 	s.mux.HandleFunc("/", s.notFound)
 }
 
@@ -635,6 +636,17 @@ func (s *Server) createStaff(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.store.CreateStaff(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
 	writeMutation(w, http.StatusCreated, result, err)
+}
+
+func (s *Server) auditLogs(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionAuditLogView) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot view audit logs.")
+		return
+	}
+
+	items, err := s.store.AuditLogs(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"items": items}, err)
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {

@@ -218,6 +218,47 @@ func TestArchivePetDocumentRejectsPetParent(t *testing.T) {
 	}
 }
 
+func TestAuditLogsAllowClinicAdmin(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleClinicAdmin))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	var payload struct {
+		Items []domain.AuditLogEntry `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Items) == 0 {
+		t.Fatal("expected at least one audit log")
+	}
+	if payload.Items[0].Action == "" {
+		t.Fatal("expected audit log action")
+	}
+}
+
+func TestAuditLogsRejectReceptionist(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
 func TestCreatePrescriptionAllowsVetTechnicianDraft(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	body := `{

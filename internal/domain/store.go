@@ -38,6 +38,7 @@ type Store interface {
 	Doctors(ctx context.Context, tenantID string) ([]Person, error)
 	Staff(ctx context.Context, tenantID string) ([]Person, error)
 	CreateStaff(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateStaffInput, idempotencyKey string) (StaffMutationResult, error)
+	AuditLogs(ctx context.Context, tenantID string) ([]AuditLogEntry, error)
 }
 
 type DemoStore struct{}
@@ -436,4 +437,29 @@ func (DemoStore) CreateStaff(ctx context.Context, tenantID string, actorUserID s
 		Email:  input.Email,
 		Status: "invited",
 	}}, nil
+}
+
+func (DemoStore) AuditLogs(ctx context.Context, tenantID string) ([]AuditLogEntry, error) {
+	return []AuditLogEntry{
+		{
+			ID:           "audit_001",
+			ActorUserID:  "user_demo_admin",
+			ActorRole:    string(RoleClinicAdmin),
+			Action:       "pet_document.upload",
+			ResourceType: "pet_document",
+			ResourceID:   "doc_001",
+			Reason:       "Rabies certificate uploaded",
+			CreatedAt:    "2026-05-12T10:00:00Z",
+		},
+		{
+			ID:           "audit_002",
+			ActorUserID:  "user_demo_admin",
+			ActorRole:    string(RoleClinicAdmin),
+			Action:       "invoice.void",
+			ResourceType: "invoice",
+			ResourceID:   "inv_001",
+			Reason:       "Duplicate invoice",
+			CreatedAt:    "2026-05-12T11:30:00Z",
+		},
+	}, nil
 }

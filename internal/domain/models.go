@@ -304,6 +304,17 @@ type StaffMutationResult struct {
 	Idempotent  bool   `json:"idempotent,omitempty"`
 }
 
+type AuditLogEntry struct {
+	ID           string `json:"id"`
+	ActorUserID  string `json:"actorUserId,omitempty"`
+	ActorRole    string `json:"actorRole,omitempty"`
+	Action       string `json:"action"`
+	ResourceType string `json:"resourceType"`
+	ResourceID   string `json:"resourceId,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	CreatedAt    string `json:"createdAt"`
+}
+
 type Feedback struct {
 	ID        string `json:"id"`
 	PetName   string `json:"petName"`

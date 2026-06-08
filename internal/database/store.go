@@ -1934,6 +1934,43 @@ func (s PostgresStore) CreateStaff(ctx context.Context, tenantID string, actorUs
 	return result, nil
 }
 
+func (s PostgresStore) AuditLogs(ctx context.Context, tenantID string) ([]domain.AuditLogEntry, error) {
+	rows, err := s.pool.Query(ctx, `
+		select
+			id::text,
+			coalesce(actor_user_id::text, ''),
+			coalesce(actor_role, ''),
+			action,
+			resource_type,
+			coalesce(resource_id::text, ''),
+			coalesce(reason, ''),
+			created_at
+		from audit_logs
+		where tenant_id = $1
+		order by created_at desc
+		limit 100
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("read audit logs: %w", err)
+	}
+	defer rows.Close()
+
+	items := []domain.AuditLogEntry{}
+	for rows.Next() {
+		var item domain.AuditLogEntry
+		var createdAt time.Time
+		if err := rows.Scan(&item.ID, &item.ActorUserID, &item.ActorRole, &item.Action, &item.ResourceType, &item.ResourceID, &item.Reason, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan audit log: %w", err)
+		}
+		item.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate audit logs: %w", err)
+	}
+	return items, nil
+}
+
 func (s PostgresStore) count(ctx context.Context, query string, tenantID string) (int64, error) {
 	var value int64
 	if err := s.pool.QueryRow(ctx, query, tenantID).Scan(&value); err != nil {

@@ -146,6 +146,13 @@ func TestHospitalPortalReadResponseContracts(t *testing.T) {
 			listField: "items",
 			itemKeys:  []string{"id", "name", "role", "email", "status"},
 		},
+		{
+			name:      "audit logs",
+			path:      "/api/v1/audit-logs",
+			topKeys:   []string{"items"},
+			listField: "items",
+			itemKeys:  []string{"id", "actorUserId", "actorRole", "action", "resourceType", "createdAt"},
+		},
 	}
 
 	for _, tt := range tests {
