@@ -1,0 +1,35 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0001-pawit-core-schema
+      author: pawit
+      labels: postgres,core
+      comments: Initial PawIt VetCare PostgreSQL schema and RBAC seed data.
+      changes:
+        - sqlFile:
+            path: ../../../internal/database/migrations/0001_pawit_core_schema.up.sql
+            relativeToChangelogFile: true
+            splitStatements: true
+            stripComments: false
+      rollback:
+        - sqlFile:
+            path: ../../../internal/database/migrations/0001_pawit_core_schema.down.sql
+            relativeToChangelogFile: true
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 0002-mutation-idempotency
+      author: pawit
+      labels: postgres,idempotency
+      comments: Add idempotency key tracking for mutation endpoints.
+      changes:
+        - sqlFile:
+            path: ../../../internal/database/migrations/0002_mutation_idempotency.up.sql
+            relativeToChangelogFile: true
+            splitStatements: true
+            stripComments: false
+      rollback:
+        - sqlFile:
+            path: ../../../internal/database/migrations/0002_mutation_idempotency.down.sql
+            relativeToChangelogFile: true
+            splitStatements: true
+            stripComments: false

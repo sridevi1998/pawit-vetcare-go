@@ -37,7 +37,7 @@ To run against local PostgreSQL instead of the in-memory demo store:
 
 ```sh
 docker compose up -d postgres
-PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=disable go run ./cmd/migrate up
+LIQUIBASE_COMMAND_URL=jdbc:postgresql://host.docker.internal:5432/pawit scripts/liquibase.sh update
 docker compose exec -T postgres psql -U pawit -d pawit < docs/database/local-dev-seed.sql
 PAWIT_ALLOW_DEV_AUTH=true PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=disable go run .
 ```
@@ -81,12 +81,30 @@ The database foundation is summarized in [docs/database/schema.md](docs/database
 
 ## Database Migrations
 
+Liquibase is the migration interface for PostgreSQL. Changelogs live under
+`db/liquibase` and reference the canonical SQL migrations in
+`internal/database/migrations`.
+
 ```sh
-PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=disable go run ./cmd/migrate status
-PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=disable go run ./cmd/migrate up
+scripts/liquibase.sh validate
+scripts/liquibase.sh status
+scripts/liquibase.sh update
 ```
 
-The production container includes `/app/pawit-migrate` for Cloud Run migration jobs.
+The Docker-based runner expects a JDBC URL. For local Docker Desktop Postgres use:
+
+```sh
+LIQUIBASE_COMMAND_URL=jdbc:postgresql://host.docker.internal:5432/pawit
+LIQUIBASE_COMMAND_USERNAME=pawit
+LIQUIBASE_COMMAND_PASSWORD=local-password
+```
+
+The production migration image is built from `Dockerfile.liquibase` and runs the
+Cloud Run job with the `pawit-liquibase-jdbc-url`, `pawit-database-username`, and
+`pawit-database-password` secrets.
+
+The legacy `go run ./cmd/migrate <up|down|status>` runner remains available for
+local compatibility while deployments transition to Liquibase.
 
 When `PAWIT_DATABASE_URL` is set, the API uses PostgreSQL for tenant-scoped reads. Without it, local development uses the in-memory demo store so frontend screens can be built before a database is running. The optional local seed file lives at [docs/database/local-dev-seed.sql](docs/database/local-dev-seed.sql).
 
