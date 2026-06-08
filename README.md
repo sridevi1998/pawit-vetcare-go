@@ -14,6 +14,7 @@ Serverless-ready Go backend for PawIt VetCare, a multi-tenant veterinary hospita
 - Lab diagnostics APIs for creating orders, processing status transitions, uploading result metadata, and sharing results with idempotency-key support
 - Billing mutation APIs for creating invoices and voiding invoices with audited ClinicAdmin approval and idempotency-key support
 - Staff management mutation APIs with ClinicAdmin role checks and idempotency-key support
+- Tenant audit log review API for authorized admins
 - Dockerfile using a non-root distroless runtime
 - GitHub Actions CI with formatting, tests, vulnerability scan, container build, and Trivy scan
 - Cloud Run service manifest

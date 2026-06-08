@@ -56,6 +56,7 @@ All application endpoints require:
 | `GET` | `/doctors` | Veterinarian management |
 | `GET` | `/staff` | Staff management |
 | `POST` | `/staff` | Invite or reactivate a tenant staff member and assign a staff role |
+| `GET` | `/audit-logs` | Tenant audit log review for authorized admins |
 
 ## Contract Maintenance
 

@@ -11,6 +11,7 @@ PawIt VetCare handles sensitive clinical, billing, and pet-parent data. Treat al
 - CORS is allow-listed
 - Request bodies are size-limited
 - Basic per-IP rate limiting is enabled
+- Tenant-scoped mutation audit logs are written transactionally and reviewable by authorized admins
 - Docker runtime uses a distroless non-root image
 - CI includes tests, formatting, vulnerability scanning, and Trivy scanning
 
@@ -20,7 +21,7 @@ PawIt VetCare handles sensitive clinical, billing, and pet-parent data. Treat al
 - Enforce database tenant scoping for every query
 - Add refresh-token rotation and token revocation
 - Add field-level AES-256-GCM encryption for sensitive personal data
-- Add immutable audit logs for clinical, billing, and admin actions
+- Expand immutable audit log coverage for identity, support access, and authentication events
 - Add WebAuthn for staff accounts
 - Add SAST, dependency review, and secret scanning branch protections
 - Complete a threat model for telemedicine, payments, file uploads, and AI advisory flows
