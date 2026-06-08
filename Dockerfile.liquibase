@@ -1,0 +1,7 @@
+FROM liquibase/liquibase:4.31.1
+
+WORKDIR /workspace
+COPY db/liquibase /workspace/db/liquibase
+COPY internal/database/migrations /workspace/internal/database/migrations
+
+ENTRYPOINT ["liquibase", "--defaults-file=/workspace/db/liquibase/liquibase.properties"]

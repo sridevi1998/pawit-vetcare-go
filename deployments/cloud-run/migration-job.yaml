@@ -17,23 +17,22 @@ spec:
           maxRetries: 0
           timeoutSeconds: 600
           containers:
-            - image: asia-south1-docker.pkg.dev/PROJECT_ID/pawit/pawit-vetcare-api:COMMIT_SHA
-              command:
-                - /app/pawit-migrate
+            - image: asia-south1-docker.pkg.dev/PROJECT_ID/pawit/pawit-vetcare-liquibase:COMMIT_SHA
               args:
-                - up
+                - update
               env:
-                - name: PAWIT_ENV
-                  value: production
-                - name: PAWIT_ALLOW_DEV_AUTH
-                  value: "false"
-                - name: PAWIT_JWT_SIGNING_KEY
+                - name: LIQUIBASE_COMMAND_URL
                   valueFrom:
                     secretKeyRef:
-                      name: pawit-jwt-signing-key
+                      name: pawit-liquibase-jdbc-url
                       key: latest
-                - name: PAWIT_DATABASE_URL
+                - name: LIQUIBASE_COMMAND_USERNAME
                   valueFrom:
                     secretKeyRef:
-                      name: pawit-database-url
+                      name: pawit-database-username
+                      key: latest
+                - name: LIQUIBASE_COMMAND_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: pawit-database-password
                       key: latest
