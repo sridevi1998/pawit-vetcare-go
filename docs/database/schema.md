@@ -14,30 +14,40 @@ The first persistence slice is PostgreSQL-first and designed for Cloud SQL Postg
 - Stripe payment references are stored without card details.
 - Sensitive personal fields have ciphertext columns where direct lookup is not required.
 
-## Migrations
+## Liquibase Migrations
 
-Migration files live in:
+Liquibase is the migration interface for PostgreSQL. The root changelog lives at:
+
+- `db/liquibase/changelog/db.changelog-root.yaml`
+
+The changelog references the canonical SQL migration files:
 
 - `internal/database/migrations/0001_pawit_core_schema.up.sql`
 - `internal/database/migrations/0001_pawit_core_schema.down.sql`
 - `internal/database/migrations/0002_mutation_idempotency.up.sql`
 - `internal/database/migrations/0002_mutation_idempotency.down.sql`
 
-The Go package `internal/database` embeds migrations so the future deploy/migration job can load them in order.
 The API uses the same schema for tenant-scoped read endpoints whenever `PAWIT_DATABASE_URL` is configured.
 
 Run migrations with:
 
 ```sh
-PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=disable go run ./cmd/migrate up
+LIQUIBASE_COMMAND_URL=jdbc:postgresql://host.docker.internal:5432/pawit scripts/liquibase.sh update
 ```
 
-The container image includes both binaries:
+Validate migration configuration with:
 
-- `/app/pawit-api`
-- `/app/pawit-migrate`
+```sh
+scripts/liquibase.sh validate
+```
 
-The Cloud Run migration job manifest is in `deployments/cloud-run/migration-job.yaml`.
+The production Liquibase image is built from `Dockerfile.liquibase`. The Cloud
+Run migration job manifest is in `deployments/cloud-run/migration-job.yaml` and
+consumes the `pawit-liquibase-jdbc-url`, `pawit-database-username`, and
+`pawit-database-password` secrets.
+
+The legacy Go migration runner remains available for local compatibility during
+the transition, but new deployment wiring should use Liquibase.
 
 ## Core Tables
 
@@ -71,4 +81,5 @@ The Cloud Run migration job manifest is in `deployments/cloud-run/migration-job.
 
 ## Next Integration Step
 
-Generate frontend clients from the OpenAPI source of truth.
+Extend Liquibase-backed SQL migrations for new modules and keep generated
+frontend clients aligned with the OpenAPI source of truth.

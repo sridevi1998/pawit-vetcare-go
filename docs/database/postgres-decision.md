@@ -22,10 +22,10 @@ These workflows need foreign keys, transactions, uniqueness rules, strict status
 The current repository already implements this direction:
 
 - `PAWIT_DATABASE_URL` enables the PostgreSQL store.
-- Migrations live in `internal/database/migrations`.
+- Liquibase changelogs live in `db/liquibase` and reference the canonical SQL files in `internal/database/migrations`.
 - `internal/database/store.go` contains the PostgreSQL-backed tenant store.
 - Production requires `PAWIT_DATABASE_URL`.
-- Cloud Run manifests are prepared for a database-backed deployment.
+- Cloud Run manifests are prepared for Liquibase-backed database migrations.
 
 ## Cost Position
 
@@ -61,10 +61,9 @@ Even then, keep PostgreSQL as the source of truth for appointments, patients, bi
 ## Implementation Next Steps
 
 1. Keep PostgreSQL as the only production database target.
-2. Continue extending SQL migrations for new product modules.
+2. Continue extending Liquibase-backed SQL migrations for new product modules.
 3. Add typed query generation with `sqlc` when query volume grows.
 4. Keep mutation endpoints transactional and idempotent.
 5. Add indexes around common tenant-scoped reads before load testing.
 6. Store uploaded files in object storage and keep only metadata in PostgreSQL.
 7. Use read replicas or materialized views later if analytics traffic grows.
-
