@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
 	"testing"
 
 	"pawit-vetcare/internal/domain"
@@ -192,6 +196,13 @@ func TestRolePoliciesResponseContract(t *testing.T) {
 	requireFirstItemKeys(t, payload, "items", []string{"role", "description", "permissions"})
 }
 
+func TestAPIContractDocsMatchRegisteredRoutes(t *testing.T) {
+	registered := registeredAPIRoutesFromSource(t)
+	documented := documentedAPIRoutes(t)
+
+	requireStringSetEqual(t, registered, documented)
+}
+
 func getJSONContractPayload(t *testing.T, server http.Handler, path string, role domain.Role) map[string]any {
 	t.Helper()
 
@@ -256,4 +267,78 @@ func requireFirstItemKeys(t *testing.T, payload map[string]any, field string, ke
 		t.Fatalf("expected first %q item to be an object, got %T", field, items[0])
 	}
 	requireKeys(t, first, keys)
+}
+
+func registeredAPIRoutesFromSource(t *testing.T) []string {
+	t.Helper()
+
+	content, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server route source: %v", err)
+	}
+
+	matches := regexp.MustCompile(`s\.mux\.HandleFunc\("([A-Z]+) (/api/v1/[^"]+)"`).FindAllStringSubmatch(string(content), -1)
+	routes := make([]string, 0, len(matches))
+	for _, match := range matches {
+		routes = append(routes, match[1]+" "+match[2])
+	}
+	sort.Strings(routes)
+	return routes
+}
+
+func documentedAPIRoutes(t *testing.T) []string {
+	t.Helper()
+
+	content, err := os.ReadFile("../../docs/api-contract.md")
+	if err != nil {
+		t.Fatalf("read API contract docs: %v", err)
+	}
+
+	matches := regexp.MustCompile(`(?m)^\| `+"`"+`(GET|POST)`+"`"+` \| `+"`"+`([^`+"`"+`]+)`+"`"+` \|`).FindAllStringSubmatch(string(content), -1)
+	routes := make([]string, 0, len(matches))
+	for _, match := range matches {
+		path := match[2]
+		if !strings.HasPrefix(path, "/api/v1/") {
+			path = "/api/v1" + path
+		}
+		routes = append(routes, match[1]+" "+path)
+	}
+	sort.Strings(routes)
+	return routes
+}
+
+func requireStringSetEqual(t *testing.T, actual []string, expected []string) {
+	t.Helper()
+
+	actualOnly, expectedOnly := diffSortedStrings(actual, expected)
+	if len(actualOnly) > 0 || len(expectedOnly) > 0 {
+		t.Fatalf("API contract docs drifted from registered routes\nregistered only: %v\ndocumented only: %v", actualOnly, expectedOnly)
+	}
+}
+
+func diffSortedStrings(actual []string, expected []string) ([]string, []string) {
+	actualSet := make(map[string]struct{}, len(actual))
+	for _, item := range actual {
+		actualSet[item] = struct{}{}
+	}
+	expectedSet := make(map[string]struct{}, len(expected))
+	for _, item := range expected {
+		expectedSet[item] = struct{}{}
+	}
+
+	var actualOnly []string
+	for item := range actualSet {
+		if _, ok := expectedSet[item]; !ok {
+			actualOnly = append(actualOnly, item)
+		}
+	}
+	var expectedOnly []string
+	for item := range expectedSet {
+		if _, ok := actualSet[item]; !ok {
+			expectedOnly = append(expectedOnly, item)
+		}
+	}
+	sort.Strings(actualOnly)
+	sort.Strings(expectedOnly)
+	return actualOnly, expectedOnly
 }

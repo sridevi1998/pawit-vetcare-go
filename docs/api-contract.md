@@ -13,7 +13,7 @@ All application endpoints require:
 - Tenant scope through JWT claim `tenant_id`
 - In local development only, `X-PawIt-Tenant-ID` is accepted when `PAWIT_ALLOW_DEV_AUTH=true`
 
-## Current Read Endpoints
+## Current API Endpoints
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -57,9 +57,10 @@ All application endpoints require:
 | `GET` | `/staff` | Staff management |
 | `POST` | `/staff` | Invite or reactivate a tenant staff member and assign a staff role |
 
-## Next Contract Slice
+## Contract Maintenance
 
-- Harden the OpenAPI source with operation IDs, tag descriptions, documented 4XX responses, and Redocly metadata cleanup.
+- Keep the OpenAPI source synchronized with implemented backend routes before wiring new frontend screens.
+- New endpoints should include operation IDs, tag descriptions, documented 4XX responses, and generated TypeScript types.
 
 ## Contract Test Coverage
 
