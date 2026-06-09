@@ -15,7 +15,8 @@ All application endpoints require:
 
 All endpoints can return the shared error envelope for authentication, authorization,
 validation, conflict, not found, dependency, and rate-limit failures. Rate-limit
-responses use HTTP `429` with error code `rate_limited`.
+responses use HTTP `429` with error code `rate_limited` and include a
+`Retry-After` header in seconds.
 
 ## Current API Endpoints
 

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +29,7 @@ func newRateLimiter(limit int, window time.Duration) *rateLimiter {
 	return &rateLimiter{buckets: map[string]bucket{}, limit: limit, window: window}
 }
 
-func (r *rateLimiter) allow(key string) bool {
+func (r *rateLimiter) allow(key string) (bool, time.Duration) {
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -45,7 +46,10 @@ func (r *rateLimiter) allow(key string) bool {
 	current.count++
 	r.buckets[key] = current
 
-	return current.count <= r.limit
+	if current.count <= r.limit {
+		return true, 0
+	}
+	return false, current.expiresAt.Sub(now)
 }
 
 func (r *rateLimiter) pruneExpired(now time.Time) {
@@ -129,12 +133,21 @@ func (s *Server) requestSizeLimit(next http.Handler) http.Handler {
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := s.clientIP(r)
-		if !s.limiter.allow(key) {
+		if ok, retryAfter := s.limiter.allow(key); !ok {
+			w.Header().Set("Retry-After", retryAfterSeconds(retryAfter))
 			writeError(w, http.StatusTooManyRequests, "rate_limited", "Too many requests. Please retry shortly.")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func retryAfterSeconds(duration time.Duration) string {
+	seconds := int(duration.Round(time.Second).Seconds())
+	if seconds < 1 {
+		seconds = 1
+	}
+	return strconv.Itoa(seconds)
 }
 
 func (s *Server) clientIP(r *http.Request) string {
