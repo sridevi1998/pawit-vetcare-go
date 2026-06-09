@@ -54,6 +54,76 @@ func TestAPIAllowsTenantScopedDevAuth(t *testing.T) {
 	}
 }
 
+func TestClientIPIgnoresForwardedHeadersFromUntrustedRemote(t *testing.T) {
+	cfg := testConfig()
+	server := &Server{cfg: cfg}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/patients", nil)
+	request.RemoteAddr = "203.0.113.20:443"
+	request.Header.Set("X-Forwarded-For", "198.51.100.30")
+
+	if got := server.clientIP(request); got != "203.0.113.20" {
+		t.Fatalf("expected remote address, got %q", got)
+	}
+}
+
+func TestClientIPUsesForwardedHeaderFromTrustedProxy(t *testing.T) {
+	cfg := testConfig()
+	cfg.TrustedProxyCIDRs = []string{"10.0.0.0/8"}
+	server := &Server{cfg: cfg}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/patients", nil)
+	request.RemoteAddr = "10.2.3.4:443"
+	request.Header.Set("X-Forwarded-For", "198.51.100.30, 10.2.3.4")
+
+	if got := server.clientIP(request); got != "198.51.100.30" {
+		t.Fatalf("expected forwarded client address, got %q", got)
+	}
+}
+
+func TestClientIPFallsBackWhenTrustedForwardedHeaderIsInvalid(t *testing.T) {
+	cfg := testConfig()
+	cfg.TrustedProxyCIDRs = []string{"10.2.3.4"}
+	server := &Server{cfg: cfg}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/patients", nil)
+	request.RemoteAddr = "10.2.3.4:443"
+	request.Header.Set("X-Forwarded-For", "not-an-ip")
+
+	if got := server.clientIP(request); got != "10.2.3.4" {
+		t.Fatalf("expected trusted proxy remote address fallback, got %q", got)
+	}
+}
+
+func TestRateLimitReturnsContractErrorEnvelope(t *testing.T) {
+	cfg := testConfig()
+	cfg.RateLimitRPM = 1
+	server := NewServer(cfg, domain.NewDemoStore())
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/patients", nil)
+		request.RemoteAddr = "203.0.113.20:443"
+		request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		if attempt == 1 && response.Code != http.StatusOK {
+			t.Fatalf("first request expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+		}
+		if attempt == 2 {
+			if response.Code != http.StatusTooManyRequests {
+				t.Fatalf("second request expected status %d, got %d: %s", http.StatusTooManyRequests, response.Code, response.Body.String())
+			}
+
+			var payload map[string]map[string]string
+			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("decode rate limit response: %v", err)
+			}
+			if payload["error"]["code"] != "rate_limited" {
+				t.Fatalf("expected rate_limited error code, got %#v", payload)
+			}
+		}
+	}
+}
+
 func TestPetsEndpointAliasesPetRecords(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/pets", nil)
@@ -1012,11 +1082,12 @@ func hasPermission(policy domain.RolePolicy, permission domain.Permission) bool 
 
 func testConfig() config.Config {
 	return config.Config{
-		Environment:      "test",
-		Port:             "8080",
-		AllowedOrigins:   []string{"http://localhost:3000"},
-		AllowDevAuth:     true,
-		RateLimitRPM:     100,
-		RequestBodyLimit: 1 << 20,
+		Environment:       "test",
+		Port:              "8080",
+		AllowedOrigins:    []string{"http://localhost:3000"},
+		TrustedProxyCIDRs: nil,
+		AllowDevAuth:      true,
+		RateLimitRPM:      100,
+		RequestBodyLimit:  1 << 20,
 	}
 }

@@ -13,6 +13,10 @@ All application endpoints require:
 - Tenant scope through JWT claim `tenant_id`
 - In local development only, `X-PawIt-Tenant-ID` is accepted when `PAWIT_ALLOW_DEV_AUTH=true`
 
+All endpoints can return the shared error envelope for authentication, authorization,
+validation, conflict, not found, dependency, and rate-limit failures. Rate-limit
+responses use HTTP `429` with error code `rate_limited`.
+
 ## Current API Endpoints
 
 | Method | Path | Purpose |
