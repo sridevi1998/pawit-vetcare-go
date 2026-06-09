@@ -25,6 +25,12 @@ type bucket struct {
 	expiresAt time.Time
 }
 
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
 	return &rateLimiter{buckets: map[string]bucket{}, limit: limit, window: window}
 }
@@ -66,17 +72,32 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 
 func (s *Server) recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
 		r = withRequestID(r)
-		w.Header().Set("X-Request-ID", requestID(r))
+		recorder := &statusRecorder{ResponseWriter: w}
+		recorder.Header().Set("X-Request-ID", requestID(r))
 
 		defer func() {
 			if err := recover(); err != nil {
 				slog.Error("panic recovered", "requestId", requestID(r), "error", err)
-				writeError(w, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+				writeError(recorder, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 			}
+			s.logRequest(r, recorder.statusCode(), recorder.bytes, time.Since(started))
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(recorder, r)
 	})
+}
+
+func (s *Server) logRequest(r *http.Request, status int, bytes int, duration time.Duration) {
+	slog.Info("request completed",
+		"requestId", requestID(r),
+		"method", r.Method,
+		"path", r.URL.Path,
+		"status", status,
+		"bytes", bytes,
+		"durationMs", duration.Milliseconds(),
+		"clientIp", s.clientIP(r),
+	)
 }
 
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
@@ -205,6 +226,30 @@ func (s *Server) trustsProxy(ip string) bool {
 		}
 	}
 	return false
+}
+
+func (w *statusRecorder) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusRecorder) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	written, err := w.ResponseWriter.Write(body)
+	w.bytes += written
+	return written, err
+}
+
+func (w *statusRecorder) statusCode() int {
+	if w.status == 0 {
+		return http.StatusOK
+	}
+	return w.status
 }
 
 func withRequestID(r *http.Request) *http.Request {
