@@ -56,6 +56,25 @@ func TestCORSExposesOperationalResponseHeaders(t *testing.T) {
 	}
 }
 
+func TestRecovererReturnsRequestIDOnPanic(t *testing.T) {
+	cfg := testConfig()
+	server := &Server{cfg: cfg}
+	handler := server.recoverer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("boom")
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, response.Code)
+	}
+	if response.Header().Get("X-Request-ID") == "" {
+		t.Fatal("expected request ID header on recovered panic response")
+	}
+}
+
 func TestAPIRequiresAuthWhenDevAuthDisabled(t *testing.T) {
 	cfg := testConfig()
 	cfg.AllowDevAuth = false

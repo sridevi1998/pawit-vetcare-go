@@ -29,6 +29,10 @@ The backend replaces Docran's TypeScript/Express service with Go. Recommended pr
 - AI: Vertex AI Gemini advisory calls, never autonomous diagnosis
 - Observability: OpenTelemetry to Google Cloud Trace and structured JSON logs
 
+The API middleware emits structured request completion logs with `requestId`,
+HTTP method, path, status, response bytes, duration, and client IP so support can
+correlate client-visible `X-Request-ID` values with backend events.
+
 ## Veterinary Modules
 
 - Appointments and check-in
