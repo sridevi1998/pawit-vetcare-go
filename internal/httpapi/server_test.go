@@ -25,6 +25,35 @@ func TestHealthIsPublic(t *testing.T) {
 	if response.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatal("expected security headers to be applied")
 	}
+	if response.Header().Get("X-Request-ID") == "" {
+		t.Fatal("expected generated request ID response header")
+	}
+}
+
+func TestRequestIDHeaderIsEchoed(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request.Header.Set("X-Request-ID", "request_test_123")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Header().Get("X-Request-ID") != "request_test_123" {
+		t.Fatalf("expected request ID to be echoed, got %q", response.Header().Get("X-Request-ID"))
+	}
+}
+
+func TestCORSExposesOperationalResponseHeaders(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request.Header.Set("Origin", "http://localhost:3000")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Header().Get("Access-Control-Expose-Headers") != "Retry-After, X-Request-ID" {
+		t.Fatalf("expected exposed operational headers, got %q", response.Header().Get("Access-Control-Expose-Headers"))
+	}
 }
 
 func TestAPIRequiresAuthWhenDevAuthDisabled(t *testing.T) {
