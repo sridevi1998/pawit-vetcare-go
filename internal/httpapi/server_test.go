@@ -112,6 +112,9 @@ func TestRateLimitReturnsContractErrorEnvelope(t *testing.T) {
 			if response.Code != http.StatusTooManyRequests {
 				t.Fatalf("second request expected status %d, got %d: %s", http.StatusTooManyRequests, response.Code, response.Body.String())
 			}
+			if response.Header().Get("Retry-After") == "" {
+				t.Fatal("expected Retry-After header on rate limit response")
+			}
 
 			var payload map[string]map[string]string
 			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
