@@ -27,3 +27,26 @@ func TestProductionConfigAcceptsRequiredSecrets(t *testing.T) {
 		t.Fatal("expected database URL to be set")
 	}
 }
+
+func TestLoadParsesTrustedProxyCIDRs(t *testing.T) {
+	t.Setenv("PAWIT_TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 192.0.2.10")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected config to load: %v", err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("expected two trusted proxy entries, got %#v", cfg.TrustedProxyCIDRs)
+	}
+	if cfg.TrustedProxyCIDRs[0] != "10.0.0.0/8" || cfg.TrustedProxyCIDRs[1] != "192.0.2.10" {
+		t.Fatalf("unexpected trusted proxy entries %#v", cfg.TrustedProxyCIDRs)
+	}
+}
+
+func TestLoadRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
+	t.Setenv("PAWIT_TRUSTED_PROXY_CIDRS", "10.0.0.0/8,not-a-cidr")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected invalid trusted proxy config to fail")
+	}
+}

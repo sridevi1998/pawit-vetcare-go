@@ -12,10 +12,11 @@ import (
 )
 
 type rateLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]bucket
-	limit   int
-	window  time.Duration
+	mu         sync.Mutex
+	buckets    map[string]bucket
+	limit      int
+	window     time.Duration
+	lastPruned time.Time
 }
 
 type bucket struct {
@@ -32,6 +33,11 @@ func (r *rateLimiter) allow(key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.lastPruned.IsZero() || now.Sub(r.lastPruned) >= r.window {
+		r.pruneExpired(now)
+		r.lastPruned = now
+	}
+
 	current := r.buckets[key]
 	if current.expiresAt.Before(now) {
 		current = bucket{expiresAt: now.Add(r.window)}
@@ -40,6 +46,14 @@ func (r *rateLimiter) allow(key string) bool {
 	r.buckets[key] = current
 
 	return current.count <= r.limit
+}
+
+func (r *rateLimiter) pruneExpired(now time.Time) {
+	for key, current := range r.buckets {
+		if current.expiresAt.Before(now) {
+			delete(r.buckets, key)
+		}
+	}
 }
 
 func (s *Server) middleware(next http.Handler) http.Handler {
@@ -114,7 +128,7 @@ func (s *Server) requestSizeLimit(next http.Handler) http.Handler {
 
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := clientIP(r)
+		key := s.clientIP(r)
 		if !s.limiter.allow(key) {
 			writeError(w, http.StatusTooManyRequests, "rate_limited", "Too many requests. Please retry shortly.")
 			return
@@ -123,19 +137,57 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 	})
 }
 
-func clientIP(r *http.Request) string {
-	for _, header := range []string{"X-Forwarded-For", "X-Real-IP"} {
-		value := strings.TrimSpace(r.Header.Get(header))
-		if value != "" {
+func (s *Server) clientIP(r *http.Request) string {
+	remoteIP := remoteIP(r.RemoteAddr)
+	if remoteIP != "" && s.trustsProxy(remoteIP) {
+		for _, header := range []string{"X-Forwarded-For", "X-Real-IP"} {
+			value := strings.TrimSpace(r.Header.Get(header))
+			if value == "" {
+				continue
+			}
 			parts := strings.Split(value, ",")
-			return strings.TrimSpace(parts[0])
+			candidate := strings.TrimSpace(parts[0])
+			if net.ParseIP(candidate) != nil {
+				return candidate
+			}
 		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if remoteIP != "" {
+		return remoteIP
+	}
+	return r.RemoteAddr
+}
+
+func remoteIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		if net.ParseIP(remoteAddr) != nil {
+			return remoteAddr
+		}
+		return ""
 	}
 	return host
+}
+
+func (s *Server) trustsProxy(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, value := range s.cfg.TrustedProxyCIDRs {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if trustedIP := net.ParseIP(value); trustedIP != nil && trustedIP.Equal(parsed) {
+			return true
+		}
+		_, network, err := net.ParseCIDR(value)
+		if err == nil && network.Contains(parsed) {
+			return true
+		}
+	}
+	return false
 }
 
 func withRequestID(r *http.Request) *http.Request {

@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -10,26 +11,28 @@ import (
 )
 
 type Config struct {
-	Environment      string
-	Port             string
-	DatabaseURL      string
-	AllowedOrigins   []string
-	JWTSigningKey    string
-	AllowDevAuth     bool
-	RateLimitRPM     int
-	RequestBodyLimit int64
+	Environment       string
+	Port              string
+	DatabaseURL       string
+	AllowedOrigins    []string
+	TrustedProxyCIDRs []string
+	JWTSigningKey     string
+	AllowDevAuth      bool
+	RateLimitRPM      int
+	RequestBodyLimit  int64
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Environment:      get("PAWIT_ENV", "development"),
-		Port:             get("PORT", "8080"),
-		DatabaseURL:      os.Getenv("PAWIT_DATABASE_URL"),
-		AllowedOrigins:   csv(get("PAWIT_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173")),
-		JWTSigningKey:    os.Getenv("PAWIT_JWT_SIGNING_KEY"),
-		AllowDevAuth:     boolEnv("PAWIT_ALLOW_DEV_AUTH", true),
-		RateLimitRPM:     intEnv("PAWIT_RATE_LIMIT_RPM", 120),
-		RequestBodyLimit: int64(intEnv("PAWIT_REQUEST_BODY_LIMIT_BYTES", 1<<20)),
+		Environment:       get("PAWIT_ENV", "development"),
+		Port:              get("PORT", "8080"),
+		DatabaseURL:       os.Getenv("PAWIT_DATABASE_URL"),
+		AllowedOrigins:    csv(get("PAWIT_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173")),
+		TrustedProxyCIDRs: csv(os.Getenv("PAWIT_TRUSTED_PROXY_CIDRS")),
+		JWTSigningKey:     os.Getenv("PAWIT_JWT_SIGNING_KEY"),
+		AllowDevAuth:      boolEnv("PAWIT_ALLOW_DEV_AUTH", true),
+		RateLimitRPM:      intEnv("PAWIT_RATE_LIMIT_RPM", 120),
+		RequestBodyLimit:  int64(intEnv("PAWIT_REQUEST_BODY_LIMIT_BYTES", 1<<20)),
 	}
 
 	if cfg.Environment == "production" {
@@ -52,6 +55,14 @@ func Load() (Config, error) {
 	}
 	if cfg.RequestBodyLimit < 1024 {
 		return Config{}, fmt.Errorf("PAWIT_REQUEST_BODY_LIMIT_BYTES must be at least 1024, got %d", cfg.RequestBodyLimit)
+	}
+	for _, value := range cfg.TrustedProxyCIDRs {
+		if net.ParseIP(value) != nil {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(value); err != nil {
+			return Config{}, fmt.Errorf("PAWIT_TRUSTED_PROXY_CIDRS contains invalid IP or CIDR %q", value)
+		}
 	}
 
 	return cfg, nil
