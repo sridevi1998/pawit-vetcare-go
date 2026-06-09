@@ -18,6 +18,10 @@ validation, conflict, not found, dependency, and rate-limit failures. Rate-limit
 responses use HTTP `429` with error code `rate_limited` and include a
 `Retry-After` header in seconds.
 
+All responses include `X-Request-ID`. When CORS is allowed for the request origin,
+browser clients can read `X-Request-ID` and `Retry-After` through
+`Access-Control-Expose-Headers`.
+
 ## Current API Endpoints
 
 | Method | Path | Purpose |

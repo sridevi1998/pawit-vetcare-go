@@ -66,13 +66,16 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 
 func (s *Server) recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = withRequestID(r)
+		w.Header().Set("X-Request-ID", requestID(r))
+
 		defer func() {
 			if err := recover(); err != nil {
 				slog.Error("panic recovered", "requestId", requestID(r), "error", err)
 				writeError(w, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 			}
 		}()
-		next.ServeHTTP(w, withRequestID(r))
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -101,6 +104,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			h.Set("Access-Control-Allow-Credentials", "true")
 			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-PawIt-Tenant-ID, X-PawIt-User-ID, X-PawIt-Role, X-Request-ID")
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			h.Set("Access-Control-Expose-Headers", "Retry-After, X-Request-ID")
 			h.Set("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {
