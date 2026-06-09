@@ -99,6 +99,20 @@ func (s *Server) validateToken(token string) (AuthContext, error) {
 		return AuthContext{}, errors.New("malformed token")
 	}
 
+	var header struct {
+		Algorithm string `json:"alg"`
+	}
+	headerPayload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return AuthContext{}, err
+	}
+	if err := json.Unmarshal(headerPayload, &header); err != nil {
+		return AuthContext{}, err
+	}
+	if header.Algorithm != "HS256" {
+		return AuthContext{}, errors.New("unsupported token algorithm")
+	}
+
 	mac := hmac.New(sha256.New, []byte(s.cfg.JWTSigningKey))
 	mac.Write([]byte(parts[0] + "." + parts[1]))
 	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))

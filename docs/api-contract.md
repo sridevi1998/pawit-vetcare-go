@@ -11,6 +11,7 @@ All application endpoints require:
 
 - A valid `pawit_access` cookie or `Authorization: Bearer <jwt>`
 - Tenant scope through JWT claim `tenant_id`
+- JWTs must be signed with `HS256` using the configured PawIt signing key
 - In local development only, `X-PawIt-Tenant-ID` is accepted when `PAWIT_ALLOW_DEV_AUTH=true`
 
 All endpoints can return the shared error envelope for authentication, authorization,
