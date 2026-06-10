@@ -87,6 +87,7 @@ Liquibase is the migration interface for PostgreSQL. Changelogs live under
 `internal/database/migrations`.
 
 ```sh
+scripts/liquibase.sh --help
 scripts/liquibase.sh validate
 scripts/liquibase.sh status
 scripts/liquibase.sh update
