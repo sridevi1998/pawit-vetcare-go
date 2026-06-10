@@ -62,6 +62,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/prescription-templates", s.prescriptionTemplates)
 	s.mux.HandleFunc("GET /api/v1/clinical-notes", s.clinicalNotes)
 	s.mux.HandleFunc("POST /api/v1/clinical-notes", s.createClinicalNote)
+	s.mux.HandleFunc("POST /api/v1/clinical-notes/{id}/finalize", s.finalizeClinicalNote)
 	s.mux.HandleFunc("GET /api/v1/lab-tests", s.labTests)
 	s.mux.HandleFunc("POST /api/v1/lab-tests", s.createLabOrder)
 	s.mux.HandleFunc("POST /api/v1/lab-tests/{id}/status", s.updateLabOrderStatus)
@@ -474,6 +475,29 @@ func (s *Server) createClinicalNote(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.store.CreateClinicalNote(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
 	writeMutation(w, http.StatusCreated, result, err)
+}
+
+func (s *Server) finalizeClinicalNote(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionClinicalNoteFinalize) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot finalize clinical notes.")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Clinical note ID is required.")
+		return
+	}
+
+	var input domain.FinalizeClinicalNoteInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.FinalizeClinicalNote(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), id, input, idempotencyKey(r))
+	writeMutation(w, http.StatusOK, result, err)
 }
 
 func (s *Server) labTests(w http.ResponseWriter, r *http.Request) {

@@ -491,6 +491,45 @@ func TestCreateClinicalNoteRequiresClinicalContent(t *testing.T) {
 	}
 }
 
+func TestFinalizeClinicalNoteAllowsVeterinarian(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/clinical-notes/note_001/finalize", strings.NewReader(`{"shareWithPetParent":true}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleVeterinarian))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	var payload domain.ClinicalNoteMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.ClinicalNote.Status != "finalized" {
+		t.Fatalf("expected finalized clinical note, got %q", payload.ClinicalNote.Status)
+	}
+	if !payload.ClinicalNote.SharedWithPetParent {
+		t.Fatal("expected finalized clinical note to be shared")
+	}
+}
+
+func TestFinalizeClinicalNoteRejectsVetTechnician(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/clinical-notes/note_001/finalize", strings.NewReader(`{}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleVetTechnician))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
 func TestFinalizePrescriptionAllowsVeterinarian(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/prescriptions/rx_001/finalize", strings.NewReader(`{"shareWithPetParent":true}`))
@@ -1031,6 +1070,13 @@ func TestMutationEndpointsForwardIdempotencyKey(t *testing.T) {
 			call: "CreateClinicalNote",
 		},
 		{
+			name: "finalize clinical note",
+			path: "/api/v1/clinical-notes/note_001/finalize",
+			body: `{"shareWithPetParent":true}`,
+			role: domain.RoleVeterinarian,
+			call: "FinalizeClinicalNote",
+		},
+		{
 			name: "create lab order",
 			path: "/api/v1/lab-tests",
 			body: `{"locationId":"loc_001","petId":"pet_001","testType":"CBC","sampleType":"blood","priority":"normal"}`,
@@ -1165,6 +1211,11 @@ func (s *idempotencyRecordingStore) FinalizePrescription(ctx context.Context, te
 func (s *idempotencyRecordingStore) CreateClinicalNote(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateClinicalNoteInput, idempotencyKey string) (domain.ClinicalNoteMutationResult, error) {
 	s.record("CreateClinicalNote", idempotencyKey)
 	return s.DemoStore.CreateClinicalNote(ctx, tenantID, actorUserID, actorRole, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) FinalizeClinicalNote(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, clinicalNoteID string, input domain.FinalizeClinicalNoteInput, idempotencyKey string) (domain.ClinicalNoteMutationResult, error) {
+	s.record("FinalizeClinicalNote", idempotencyKey)
+	return s.DemoStore.FinalizeClinicalNote(ctx, tenantID, actorUserID, actorRole, clinicalNoteID, input, idempotencyKey)
 }
 
 func (s *idempotencyRecordingStore) CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateLabOrderInput, idempotencyKey string) (domain.LabOrderMutationResult, error) {

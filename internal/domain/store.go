@@ -30,6 +30,7 @@ type Store interface {
 	FinalizePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole Role, prescriptionID string, input FinalizePrescriptionInput, idempotencyKey string) (PrescriptionMutationResult, error)
 	ClinicalNotes(ctx context.Context, tenantID string) ([]ClinicalNote, error)
 	CreateClinicalNote(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateClinicalNoteInput, idempotencyKey string) (ClinicalNoteMutationResult, error)
+	FinalizeClinicalNote(ctx context.Context, tenantID string, actorUserID string, actorRole Role, clinicalNoteID string, input FinalizeClinicalNoteInput, idempotencyKey string) (ClinicalNoteMutationResult, error)
 	LabTests(ctx context.Context, tenantID string) ([]LabTest, error)
 	CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateLabOrderInput, idempotencyKey string) (LabOrderMutationResult, error)
 	UpdateLabOrderStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UpdateLabOrderStatusInput, idempotencyKey string) (LabOrderMutationResult, error)
@@ -312,6 +313,17 @@ func (DemoStore) CreateClinicalNote(ctx context.Context, tenantID string, actorU
 		Subject:             subject,
 		Status:              "draft",
 		SharedWithPetParent: input.SharedWithPetParent,
+	}}, nil
+}
+
+func (DemoStore) FinalizeClinicalNote(ctx context.Context, tenantID string, actorUserID string, actorRole Role, clinicalNoteID string, input FinalizeClinicalNoteInput, idempotencyKey string) (ClinicalNoteMutationResult, error) {
+	return ClinicalNoteMutationResult{ClinicalNote: ClinicalNote{
+		ID:                  clinicalNoteID,
+		PetName:             "Demo Pet",
+		OwnerName:           "Demo Guardian",
+		Subject:             "Demo finalized clinical note",
+		Status:              "finalized",
+		SharedWithPetParent: input.ShareWithPetParent,
 	}}, nil
 }
 
