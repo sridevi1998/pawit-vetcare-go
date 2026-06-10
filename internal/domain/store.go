@@ -24,14 +24,14 @@ type Store interface {
 	PetDocuments(ctx context.Context, tenantID string, petID string) ([]PetDocument, error)
 	UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input UploadPetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error)
 	ArchivePetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, documentID string, input ArchivePetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error)
-	Prescriptions(ctx context.Context, tenantID string) ([]Prescription, error)
+	Prescriptions(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]Prescription, error)
 	PrescriptionTemplates(ctx context.Context, tenantID string) ([]PrescriptionTemplate, error)
 	CreatePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreatePrescriptionInput, idempotencyKey string) (PrescriptionMutationResult, error)
 	FinalizePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole Role, prescriptionID string, input FinalizePrescriptionInput, idempotencyKey string) (PrescriptionMutationResult, error)
-	ClinicalNotes(ctx context.Context, tenantID string) ([]ClinicalNote, error)
+	ClinicalNotes(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]ClinicalNote, error)
 	CreateClinicalNote(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateClinicalNoteInput, idempotencyKey string) (ClinicalNoteMutationResult, error)
 	FinalizeClinicalNote(ctx context.Context, tenantID string, actorUserID string, actorRole Role, clinicalNoteID string, input FinalizeClinicalNoteInput, idempotencyKey string) (ClinicalNoteMutationResult, error)
-	LabTests(ctx context.Context, tenantID string) ([]LabTest, error)
+	LabTests(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]LabTest, error)
 	CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateLabOrderInput, idempotencyKey string) (LabOrderMutationResult, error)
 	UpdateLabOrderStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UpdateLabOrderStatusInput, idempotencyKey string) (LabOrderMutationResult, error)
 	UploadLabResult(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UploadLabResultInput, idempotencyKey string) (LabOrderMutationResult, error)
@@ -262,7 +262,7 @@ func (DemoStore) PrescriptionTemplates(ctx context.Context, tenantID string) ([]
 	}, nil
 }
 
-func (DemoStore) Prescriptions(ctx context.Context, tenantID string) ([]Prescription, error) {
+func (DemoStore) Prescriptions(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]Prescription, error) {
 	return []Prescription{
 		{ID: "rx_draft_001", PetName: "Bruno", OwnerName: "Jordan Ellis", Status: "draft", MedicationNames: []string{"Cetirizine"}, Instructions: "Draft pending veterinarian review.", SharedWithPetParent: false, UpdatedAt: "2026-05-12T14:00:00Z"},
 	}, nil
@@ -295,7 +295,7 @@ func (DemoStore) FinalizePrescription(ctx context.Context, tenantID string, acto
 	}}, nil
 }
 
-func (DemoStore) ClinicalNotes(ctx context.Context, tenantID string) ([]ClinicalNote, error) {
+func (DemoStore) ClinicalNotes(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]ClinicalNote, error) {
 	return []ClinicalNote{
 		{ID: "note_001", PetName: "Milo", OwnerName: "Avery Parker", Subject: "Annual wellness exam", Status: "finalized", UpdatedAt: "2026-05-01T10:30:00Z", SharedWithPetParent: true},
 	}, nil
@@ -327,7 +327,7 @@ func (DemoStore) FinalizeClinicalNote(ctx context.Context, tenantID string, acto
 	}}, nil
 }
 
-func (DemoStore) LabTests(ctx context.Context, tenantID string) ([]LabTest, error) {
+func (DemoStore) LabTests(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]LabTest, error) {
 	return []LabTest{
 		{ID: "lab_001", PetName: "Bruno", OwnerName: "Jordan Ellis", TestType: "Skin scraping", LabCenter: "Northside Veterinary Lab", LabType: "external", Status: LabSentOut, SharedWithPetParent: false},
 	}, nil

@@ -402,7 +402,7 @@ func (s *Server) prescriptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := s.store.Prescriptions(r.Context(), auth.TenantID)
+	items, err := s.store.Prescriptions(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role))
 	writeData(w, map[string]any{"items": items}, err)
 }
 
@@ -452,7 +452,12 @@ func (s *Server) finalizePrescription(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) clinicalNotes(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
-	items, err := s.store.ClinicalNotes(r.Context(), auth.TenantID)
+	if !roleCan(auth.Role, domain.PermissionClinicalNoteView, domain.PermissionClinicalNoteViewShared) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot view clinical notes.")
+		return
+	}
+
+	items, err := s.store.ClinicalNotes(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role))
 	writeData(w, map[string]any{"items": items}, err)
 }
 
@@ -502,7 +507,12 @@ func (s *Server) finalizeClinicalNote(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) labTests(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
-	items, err := s.store.LabTests(r.Context(), auth.TenantID)
+	if !roleCan(auth.Role, domain.PermissionLabOrderCreate, domain.PermissionLabOrderProcess, domain.PermissionLabResultShare, domain.PermissionLabResultViewShared) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot view lab tests.")
+		return
+	}
+
+	items, err := s.store.LabTests(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role))
 	writeData(w, map[string]any{"items": items}, err)
 }
 

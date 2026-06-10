@@ -967,7 +967,12 @@ func (s PostgresStore) PrescriptionTemplates(ctx context.Context, tenantID strin
 	return s.demo.PrescriptionTemplates(ctx, tenantID)
 }
 
-func (s PostgresStore) Prescriptions(ctx context.Context, tenantID string) ([]domain.Prescription, error) {
+func (s PostgresStore) Prescriptions(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.Prescription, error) {
+	sharedOnly, err := sharedPrescriptionReadOnly(actorRole)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.pool.Query(ctx, `
 		select
 			pr.id::text,
@@ -988,11 +993,27 @@ func (s PostgresStore) Prescriptions(ctx context.Context, tenantID string) ([]do
 			order by is_primary desc, created_at
 			limit 1
 		) g on true
-		where pr.tenant_id = $1 and pr.archived_at is null
+		where pr.tenant_id = $1
+			and pr.archived_at is null
+			and (
+				$2::boolean = false
+				or (
+					pr.shared_with_pet_parent = true
+					and exists (
+						select 1
+						from pet_guardians pg
+						where pg.tenant_id = pr.tenant_id
+							and pg.pet_id = pr.pet_id
+							and pg.user_id = $3
+							and pg.can_view_records = true
+							and pg.archived_at is null
+					)
+				)
+			)
 		group by pr.id, p.name, g.name
 		order by pr.updated_at desc
 		limit 100
-	`, tenantID)
+	`, tenantID, sharedOnly, uuidOrNil(actorUserID))
 	if err != nil {
 		return nil, fmt.Errorf("read prescriptions: %w", err)
 	}
@@ -1186,7 +1207,12 @@ func (s PostgresStore) FinalizePrescription(ctx context.Context, tenantID string
 	return result, nil
 }
 
-func (s PostgresStore) ClinicalNotes(ctx context.Context, tenantID string) ([]domain.ClinicalNote, error) {
+func (s PostgresStore) ClinicalNotes(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.ClinicalNote, error) {
+	sharedOnly, err := sharedClinicalNoteReadOnly(actorRole)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.pool.Query(ctx, `
 		select
 			n.id::text,
@@ -1205,10 +1231,26 @@ func (s PostgresStore) ClinicalNotes(ctx context.Context, tenantID string) ([]do
 			order by is_primary desc, created_at
 			limit 1
 		) g on true
-		where n.tenant_id = $1 and n.archived_at is null
+		where n.tenant_id = $1
+			and n.archived_at is null
+			and (
+				$2::boolean = false
+				or (
+					n.shared_with_pet_parent = true
+					and exists (
+						select 1
+						from pet_guardians pg
+						where pg.tenant_id = n.tenant_id
+							and pg.pet_id = n.pet_id
+							and pg.user_id = $3
+							and pg.can_view_records = true
+							and pg.archived_at is null
+					)
+				)
+			)
 		order by n.updated_at desc
 		limit 100
-	`, tenantID)
+	`, tenantID, sharedOnly, uuidOrNil(actorUserID))
 	if err != nil {
 		return nil, fmt.Errorf("read clinical notes: %w", err)
 	}
@@ -1385,7 +1427,12 @@ func (s PostgresStore) FinalizeClinicalNote(ctx context.Context, tenantID string
 	return result, nil
 }
 
-func (s PostgresStore) LabTests(ctx context.Context, tenantID string) ([]domain.LabTest, error) {
+func (s PostgresStore) LabTests(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.LabTest, error) {
+	sharedOnly, err := sharedLabResultReadOnly(actorRole)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.pool.Query(ctx, `
 		select
 			o.id::text,
@@ -1414,10 +1461,26 @@ func (s PostgresStore) LabTests(ctx context.Context, tenantID string) ([]domain.
 			order by is_primary desc, created_at
 			limit 1
 		) g on true
-		where o.tenant_id = $1 and o.cancelled_at is null
+		where o.tenant_id = $1
+			and o.cancelled_at is null
+			and (
+				$2::boolean = false
+				or (
+					o.shared_with_pet_parent = true
+					and exists (
+						select 1
+						from pet_guardians pg
+						where pg.tenant_id = o.tenant_id
+							and pg.pet_id = o.pet_id
+							and pg.user_id = $3
+							and pg.can_view_records = true
+							and pg.archived_at is null
+					)
+				)
+			)
 		order by o.created_at desc
 		limit 100
-	`, tenantID)
+	`, tenantID, sharedOnly, uuidOrNil(actorUserID))
 	if err != nil {
 		return nil, fmt.Errorf("read lab tests: %w", err)
 	}
@@ -2644,6 +2707,36 @@ func roleHasAny(role domain.Role, permissions ...domain.Permission) bool {
 		}
 	}
 	return false
+}
+
+func sharedPrescriptionReadOnly(role domain.Role) (bool, error) {
+	if roleHasAny(role, domain.PermissionPrescriptionView) {
+		return false, nil
+	}
+	if roleHasAny(role, domain.PermissionPrescriptionViewShared) {
+		return true, nil
+	}
+	return false, domain.ErrForbidden
+}
+
+func sharedClinicalNoteReadOnly(role domain.Role) (bool, error) {
+	if roleHasAny(role, domain.PermissionClinicalNoteView) {
+		return false, nil
+	}
+	if roleHasAny(role, domain.PermissionClinicalNoteViewShared) {
+		return true, nil
+	}
+	return false, domain.ErrForbidden
+}
+
+func sharedLabResultReadOnly(role domain.Role) (bool, error) {
+	if roleHasAny(role, domain.PermissionLabOrderCreate, domain.PermissionLabOrderProcess, domain.PermissionLabResultShare) {
+		return false, nil
+	}
+	if roleHasAny(role, domain.PermissionLabResultViewShared) {
+		return true, nil
+	}
+	return false, domain.ErrForbidden
 }
 
 func validManagedStaffRole(role domain.Role) bool {
