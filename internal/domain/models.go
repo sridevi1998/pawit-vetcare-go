@@ -220,6 +220,10 @@ type CreateClinicalNoteInput struct {
 	SharedWithPetParent bool           `json:"sharedWithPetParent,omitempty"`
 }
 
+type FinalizeClinicalNoteInput struct {
+	ShareWithPetParent bool `json:"shareWithPetParent,omitempty"`
+}
+
 type ClinicalNoteMutationResult struct {
 	ClinicalNote ClinicalNote `json:"clinicalNote"`
 	Idempotent   bool         `json:"idempotent,omitempty"`

@@ -55,6 +55,7 @@ browser clients can read `X-Request-ID` and `Retry-After` through
 | `GET` | `/prescription-templates` | Veterinary prescription templates |
 | `GET` | `/clinical-notes` | SOAP notes and consultations |
 | `POST` | `/clinical-notes` | Create a draft SOAP/clinical note with optional vitals |
+| `POST` | `/clinical-notes/{id}/finalize` | Finalize a draft clinical note and optionally share it with the pet parent |
 | `GET` | `/lab-tests` | Diagnostics and reports |
 | `POST` | `/lab-tests` | Create an internal or external lab order |
 | `POST` | `/lab-tests/{id}/status` | Process a lab order through sample/result statuses |

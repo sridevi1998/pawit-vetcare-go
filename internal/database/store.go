@@ -1314,6 +1314,77 @@ func (s PostgresStore) CreateClinicalNote(ctx context.Context, tenantID string, 
 	return result, nil
 }
 
+func (s PostgresStore) FinalizeClinicalNote(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, clinicalNoteID string, input domain.FinalizeClinicalNoteInput, idempotencyKey string) (domain.ClinicalNoteMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionClinicalNoteFinalize) {
+		return domain.ClinicalNoteMutationResult{}, domain.ErrForbidden
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ClinicalNoteMutationResult{}, fmt.Errorf("begin clinical note finalize: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(struct {
+		ClinicalNoteID string
+		Input          domain.FinalizeClinicalNoteInput
+	}{ClinicalNoteID: clinicalNoteID, Input: input})
+	if result, ok, err := idempotentClinicalNoteResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	var currentStatus string
+	err = tx.QueryRow(ctx, `
+		select status::text
+		from clinical_notes
+		where tenant_id = $1 and id = $2 and archived_at is null
+		for update
+	`, tenantID, clinicalNoteID).Scan(&currentStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ClinicalNoteMutationResult{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.ClinicalNoteMutationResult{}, fmt.Errorf("read clinical note: %w", err)
+	}
+	if currentStatus == "finalized" {
+		return domain.ClinicalNoteMutationResult{}, fmt.Errorf("%w: clinical note is already finalized", domain.ErrConflict)
+	}
+
+	command, err := tx.Exec(ctx, `
+		update clinical_notes
+		set status = 'finalized',
+			finalized_by_user_id = $3,
+			shared_with_pet_parent = shared_with_pet_parent or $4,
+			finalized_at = now(),
+			updated_at = now()
+		where tenant_id = $1 and id = $2 and archived_at is null
+	`, tenantID, clinicalNoteID, uuidOrNil(actorUserID), input.ShareWithPetParent)
+	if err != nil {
+		return domain.ClinicalNoteMutationResult{}, fmt.Errorf("finalize clinical note: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return domain.ClinicalNoteMutationResult{}, domain.ErrNotFound
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "clinical_note.finalize", "clinical_note", clinicalNoteID, "finalized"); err != nil {
+		return domain.ClinicalNoteMutationResult{}, err
+	}
+
+	clinicalNote, err := clinicalNoteByID(ctx, tx, tenantID, clinicalNoteID)
+	if err != nil {
+		return domain.ClinicalNoteMutationResult{}, err
+	}
+	result := domain.ClinicalNoteMutationResult{ClinicalNote: clinicalNote}
+	if err := rememberClinicalNoteIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusOK, result); err != nil {
+		return domain.ClinicalNoteMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ClinicalNoteMutationResult{}, fmt.Errorf("commit clinical note finalize: %w", err)
+	}
+	return result, nil
+}
+
 func (s PostgresStore) LabTests(ctx context.Context, tenantID string) ([]domain.LabTest, error) {
 	rows, err := s.pool.Query(ctx, `
 		select
