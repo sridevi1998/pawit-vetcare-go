@@ -752,6 +752,73 @@ func TestCompleteQueueEntryAllowsQueueManager(t *testing.T) {
 	}
 }
 
+func TestPetParentSharedMedicalReadsForwardActorScope(t *testing.T) {
+	store := &readScopeRecordingStore{}
+	server := NewServer(testConfig(), store)
+
+	tests := []struct {
+		name string
+		path string
+		call string
+	}{
+		{name: "prescriptions", path: "/api/v1/prescriptions", call: "Prescriptions"},
+		{name: "clinical notes", path: "/api/v1/clinical-notes", call: "ClinicalNotes"},
+		{name: "lab tests", path: "/api/v1/lab-tests", call: "LabTests"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store.calls = nil
+			request := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+			request.Header.Set("X-PawIt-User-ID", "guardian_user_001")
+			request.Header.Set("X-PawIt-Role", string(domain.RolePetParent))
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+			}
+			if len(store.calls) != 1 {
+				t.Fatalf("expected one read call, got %#v", store.calls)
+			}
+			call := store.calls[0]
+			if call.name != tt.call || call.actorUserID != "guardian_user_001" || call.actorRole != domain.RolePetParent {
+				t.Fatalf("unexpected read scope %#v", call)
+			}
+		})
+	}
+}
+
+func TestClinicalNotesRejectsRoleWithoutReadPermission(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/clinical-notes", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", "BillingStaff")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
+func TestLabTestsRejectsRoleWithoutReadPermission(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/lab-tests", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", "BillingStaff")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
 func TestCreateLabOrderAllowsVeterinarian(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	body := `{"locationId":"loc_001","petId":"pet_001","testType":"CBC","sampleType":"blood","priority":"normal"}`
@@ -1246,6 +1313,32 @@ func (s *idempotencyRecordingStore) VoidInvoice(ctx context.Context, tenantID st
 func (s *idempotencyRecordingStore) CreateStaff(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateStaffInput, idempotencyKey string) (domain.StaffMutationResult, error) {
 	s.record("CreateStaff", idempotencyKey)
 	return s.DemoStore.CreateStaff(ctx, tenantID, actorUserID, actorRole, input, idempotencyKey)
+}
+
+type recordedReadScopeCall struct {
+	name        string
+	actorUserID string
+	actorRole   domain.Role
+}
+
+type readScopeRecordingStore struct {
+	domain.DemoStore
+	calls []recordedReadScopeCall
+}
+
+func (s *readScopeRecordingStore) Prescriptions(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.Prescription, error) {
+	s.calls = append(s.calls, recordedReadScopeCall{name: "Prescriptions", actorUserID: actorUserID, actorRole: actorRole})
+	return s.DemoStore.Prescriptions(ctx, tenantID, actorUserID, actorRole)
+}
+
+func (s *readScopeRecordingStore) ClinicalNotes(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.ClinicalNote, error) {
+	s.calls = append(s.calls, recordedReadScopeCall{name: "ClinicalNotes", actorUserID: actorUserID, actorRole: actorRole})
+	return s.DemoStore.ClinicalNotes(ctx, tenantID, actorUserID, actorRole)
+}
+
+func (s *readScopeRecordingStore) LabTests(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.LabTest, error) {
+	s.calls = append(s.calls, recordedReadScopeCall{name: "LabTests", actorUserID: actorUserID, actorRole: actorRole})
+	return s.DemoStore.LabTests(ctx, tenantID, actorUserID, actorRole)
 }
 
 func hasPermission(policy domain.RolePolicy, permission domain.Permission) bool {

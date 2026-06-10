@@ -23,6 +23,12 @@ All responses include `X-Request-ID`. When CORS is allowed for the request origi
 browser clients can read `X-Request-ID` and `Retry-After` through
 `Access-Control-Expose-Headers`.
 
+Pet-parent shared medical reads are owner-scoped. When a caller only has
+`clinical_note.view_shared`, `prescription.view_shared`, or
+`lab_result.view_shared`, list responses include only records that are both
+shared with the pet parent and attached to a pet where the caller is an active
+guardian with record-view access.
+
 ## Current API Endpoints
 
 | Method | Path | Purpose |
