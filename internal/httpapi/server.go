@@ -61,6 +61,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/prescriptions/{id}/finalize", s.finalizePrescription)
 	s.mux.HandleFunc("GET /api/v1/prescription-templates", s.prescriptionTemplates)
 	s.mux.HandleFunc("GET /api/v1/clinical-notes", s.clinicalNotes)
+	s.mux.HandleFunc("POST /api/v1/clinical-notes", s.createClinicalNote)
 	s.mux.HandleFunc("GET /api/v1/lab-tests", s.labTests)
 	s.mux.HandleFunc("POST /api/v1/lab-tests", s.createLabOrder)
 	s.mux.HandleFunc("POST /api/v1/lab-tests/{id}/status", s.updateLabOrderStatus)
@@ -454,6 +455,27 @@ func (s *Server) clinicalNotes(w http.ResponseWriter, r *http.Request) {
 	writeData(w, map[string]any{"items": items}, err)
 }
 
+func (s *Server) createClinicalNote(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionClinicalNoteDraft) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot draft clinical notes.")
+		return
+	}
+
+	var input domain.CreateClinicalNoteInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateCreateClinicalNote(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.CreateClinicalNote(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
+	writeMutation(w, http.StatusCreated, result, err)
+}
+
 func (s *Server) labTests(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
 	items, err := s.store.LabTests(r.Context(), auth.TenantID)
@@ -785,6 +807,23 @@ func validateCreatePrescription(input domain.CreatePrescriptionInput) error {
 		if strings.TrimSpace(medication.MedicationName) == "" {
 			return errors.New("medicationName is required")
 		}
+	}
+	return nil
+}
+
+func validateCreateClinicalNote(input domain.CreateClinicalNoteInput) error {
+	if strings.TrimSpace(input.LocationID) == "" {
+		return errors.New("locationId is required")
+	}
+	if strings.TrimSpace(input.PetID) == "" {
+		return errors.New("petId is required")
+	}
+	if strings.TrimSpace(input.ReasonForVisit) == "" &&
+		strings.TrimSpace(input.Subjective) == "" &&
+		strings.TrimSpace(input.Objective) == "" &&
+		strings.TrimSpace(input.Assessment) == "" &&
+		strings.TrimSpace(input.Plan) == "" {
+		return errors.New("at least one clinical note field is required")
 	}
 	return nil
 }

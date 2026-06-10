@@ -1,6 +1,9 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 type Store interface {
 	Ready(ctx context.Context) error
@@ -26,6 +29,7 @@ type Store interface {
 	CreatePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreatePrescriptionInput, idempotencyKey string) (PrescriptionMutationResult, error)
 	FinalizePrescription(ctx context.Context, tenantID string, actorUserID string, actorRole Role, prescriptionID string, input FinalizePrescriptionInput, idempotencyKey string) (PrescriptionMutationResult, error)
 	ClinicalNotes(ctx context.Context, tenantID string) ([]ClinicalNote, error)
+	CreateClinicalNote(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateClinicalNoteInput, idempotencyKey string) (ClinicalNoteMutationResult, error)
 	LabTests(ctx context.Context, tenantID string) ([]LabTest, error)
 	CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateLabOrderInput, idempotencyKey string) (LabOrderMutationResult, error)
 	UpdateLabOrderStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UpdateLabOrderStatusInput, idempotencyKey string) (LabOrderMutationResult, error)
@@ -294,6 +298,21 @@ func (DemoStore) ClinicalNotes(ctx context.Context, tenantID string) ([]Clinical
 	return []ClinicalNote{
 		{ID: "note_001", PetName: "Milo", OwnerName: "Avery Parker", Subject: "Annual wellness exam", Status: "finalized", UpdatedAt: "2026-05-01T10:30:00Z", SharedWithPetParent: true},
 	}, nil
+}
+
+func (DemoStore) CreateClinicalNote(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateClinicalNoteInput, idempotencyKey string) (ClinicalNoteMutationResult, error) {
+	subject := strings.TrimSpace(input.ReasonForVisit)
+	if subject == "" {
+		subject = strings.TrimSpace(input.Assessment)
+	}
+	return ClinicalNoteMutationResult{ClinicalNote: ClinicalNote{
+		ID:                  "note_demo_created",
+		PetName:             "Demo Pet",
+		OwnerName:           "Demo Guardian",
+		Subject:             subject,
+		Status:              "draft",
+		SharedWithPetParent: input.SharedWithPetParent,
+	}}, nil
 }
 
 func (DemoStore) LabTests(ctx context.Context, tenantID string) ([]LabTest, error) {
