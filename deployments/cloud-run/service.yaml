@@ -27,6 +27,12 @@ spec:
               value: "false"
             - name: PAWIT_ALLOWED_ORIGINS
               value: https://hospital.pawit.care,https://app.pawit.care
+            - name: PAWIT_TRUSTED_PROXY_CIDRS
+              value: 10.0.0.0/8
+            - name: PAWIT_RATE_LIMIT_RPM
+              value: "120"
+            - name: PAWIT_REQUEST_BODY_LIMIT_BYTES
+              value: "1048576"
             - name: PAWIT_JWT_SIGNING_KEY
               valueFrom:
                 secretKeyRef:
