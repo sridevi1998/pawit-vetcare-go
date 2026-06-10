@@ -32,6 +32,11 @@ spec:
                 secretKeyRef:
                   name: pawit-jwt-signing-key
                   key: latest
+            - name: PAWIT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pawit-database-url
+                  key: latest
           resources:
             limits:
               cpu: "1"

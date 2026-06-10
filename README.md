@@ -59,7 +59,7 @@ Required:
 - `PAWIT_ENV=production`
 - `PAWIT_ALLOW_DEV_AUTH=false`
 - `PAWIT_JWT_SIGNING_KEY` from Google Secret Manager
-- `PAWIT_DATABASE_URL` from Google Secret Manager
+- `PAWIT_DATABASE_URL` from the `pawit-database-url` Secret Manager secret
 - `PAWIT_ALLOWED_ORIGINS` with the deployed frontend origins
 - `PAWIT_TRUSTED_PROXY_CIDRS` with the trusted load balancer or ingress proxy IP/CIDR ranges when forwarded client IP headers should be honored for rate limiting
 
