@@ -62,6 +62,7 @@ Required:
 - `PAWIT_DATABASE_URL` from the `pawit-database-url` Secret Manager secret
 - `PAWIT_ALLOWED_ORIGINS` with the deployed frontend origins
 - `PAWIT_TRUSTED_PROXY_CIDRS` with the trusted load balancer or ingress proxy IP/CIDR ranges when forwarded client IP headers should be honored for rate limiting
+- `PAWIT_RATE_LIMIT_RPM` and `PAWIT_REQUEST_BODY_LIMIT_BYTES` set explicitly for Cloud Run runtime limits
 
 ## Target Platform
 
