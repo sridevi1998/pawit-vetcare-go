@@ -103,7 +103,8 @@ LIQUIBASE_COMMAND_PASSWORD=local-password
 
 The production migration image is built from `Dockerfile.liquibase` and runs the
 Cloud Run job with the `pawit-liquibase-jdbc-url`, `pawit-database-username`, and
-`pawit-database-password` secrets.
+`pawit-database-password` secrets. The job runs `update` with no automatic retries
+so failed migrations can be inspected before a manual rerun.
 
 The legacy `go run ./cmd/migrate <up|down|status>` runner remains available for
 local compatibility while deployments transition to Liquibase.
