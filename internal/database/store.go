@@ -1230,6 +1230,90 @@ func (s PostgresStore) ClinicalNotes(ctx context.Context, tenantID string) ([]do
 	return items, nil
 }
 
+func (s PostgresStore) CreateClinicalNote(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, input domain.CreateClinicalNoteInput, idempotencyKey string) (domain.ClinicalNoteMutationResult, error) {
+	if !roleHasAny(actorRole, domain.PermissionClinicalNoteDraft) {
+		return domain.ClinicalNoteMutationResult{}, domain.ErrForbidden
+	}
+	if !isUUID(actorUserID) {
+		return domain.ClinicalNoteMutationResult{}, fmt.Errorf("%w: actor user id must be a UUID", domain.ErrValidation)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ClinicalNoteMutationResult{}, fmt.Errorf("begin clinical note create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	hash := mutationHash(input)
+	if result, ok, err := idempotentClinicalNoteResult(ctx, tx, tenantID, idempotencyKey, hash); ok || err != nil {
+		return result, err
+	}
+
+	vitals := "{}"
+	if input.Vitals != nil {
+		body, err := json.Marshal(input.Vitals)
+		if err != nil {
+			return domain.ClinicalNoteMutationResult{}, fmt.Errorf("%w: vitals must be JSON object compatible", domain.ErrValidation)
+		}
+		vitals = string(body)
+	}
+
+	var clinicalNoteID string
+	err = tx.QueryRow(ctx, `
+		insert into clinical_notes (
+			tenant_id,
+			location_id,
+			pet_id,
+			appointment_id,
+			author_user_id,
+			status,
+			reason_for_visit,
+			subjective,
+			objective,
+			assessment,
+			plan,
+			vitals,
+			shared_with_pet_parent
+		)
+		values ($1, $2, $3, $4, $5, 'draft', $6, $7, $8, $9, $10, $11::jsonb, $12)
+		returning id::text
+	`,
+		tenantID,
+		input.LocationID,
+		input.PetID,
+		uuidOrNil(input.AppointmentID),
+		actorUserID,
+		nullString(input.ReasonForVisit),
+		nullString(input.Subjective),
+		nullString(input.Objective),
+		nullString(input.Assessment),
+		nullString(input.Plan),
+		vitals,
+		input.SharedWithPetParent,
+	).Scan(&clinicalNoteID)
+	if err != nil {
+		return domain.ClinicalNoteMutationResult{}, fmt.Errorf("create clinical note: %w", err)
+	}
+
+	if err := audit(ctx, tx, tenantID, actorUserID, actorRole, "clinical_note.create", "clinical_note", clinicalNoteID, input.ReasonForVisit); err != nil {
+		return domain.ClinicalNoteMutationResult{}, err
+	}
+
+	clinicalNote, err := clinicalNoteByID(ctx, tx, tenantID, clinicalNoteID)
+	if err != nil {
+		return domain.ClinicalNoteMutationResult{}, err
+	}
+	result := domain.ClinicalNoteMutationResult{ClinicalNote: clinicalNote}
+	if err := rememberClinicalNoteIdempotentResult(ctx, tx, tenantID, idempotencyKey, hash, httpStatusCreated, result); err != nil {
+		return domain.ClinicalNoteMutationResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ClinicalNoteMutationResult{}, fmt.Errorf("commit clinical note create: %w", err)
+	}
+	return result, nil
+}
+
 func (s PostgresStore) LabTests(ctx context.Context, tenantID string) ([]domain.LabTest, error) {
 	rows, err := s.pool.Query(ctx, `
 		select
@@ -2190,6 +2274,39 @@ func prescriptionByID(ctx context.Context, q rowQuerier, tenantID string, prescr
 	return item, nil
 }
 
+func clinicalNoteByID(ctx context.Context, q rowQuerier, tenantID string, clinicalNoteID string) (domain.ClinicalNote, error) {
+	var item domain.ClinicalNote
+	var updatedAt time.Time
+	err := q.QueryRow(ctx, `
+		select
+			n.id::text,
+			p.name,
+			coalesce(g.name, ''),
+			coalesce(nullif(n.reason_for_visit, ''), nullif(n.assessment, ''), 'Clinical note'),
+			n.status::text,
+			n.updated_at,
+			n.shared_with_pet_parent
+		from clinical_notes n
+		join pets p on p.id = n.pet_id and p.tenant_id = n.tenant_id
+		left join lateral (
+			select name
+			from pet_guardians
+			where tenant_id = n.tenant_id and pet_id = n.pet_id and archived_at is null
+			order by is_primary desc, created_at
+			limit 1
+		) g on true
+		where n.tenant_id = $1 and n.id = $2 and n.archived_at is null
+	`, tenantID, clinicalNoteID).Scan(&item.ID, &item.PetName, &item.OwnerName, &item.Subject, &item.Status, &updatedAt, &item.SharedWithPetParent)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ClinicalNote{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.ClinicalNote{}, fmt.Errorf("read clinical note: %w", err)
+	}
+	item.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return item, nil
+}
+
 func formatCents(cents int64) string {
 	sign := ""
 	if cents < 0 {
@@ -2748,6 +2865,36 @@ func idempotentPrescriptionResult(ctx context.Context, tx pgx.Tx, tenantID strin
 	return result, true, nil
 }
 
+func idempotentClinicalNoteResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string) (domain.ClinicalNoteMutationResult, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return domain.ClinicalNoteMutationResult{}, false, nil
+	}
+
+	var existingHash string
+	var body []byte
+	err := tx.QueryRow(ctx, `
+		select request_hash, response_body
+		from idempotency_keys
+		where tenant_id = $1 and key = $2 and expires_at > now()
+	`, tenantID, key).Scan(&existingHash, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ClinicalNoteMutationResult{}, false, nil
+	}
+	if err != nil {
+		return domain.ClinicalNoteMutationResult{}, false, fmt.Errorf("read idempotency key: %w", err)
+	}
+	if existingHash != requestHash {
+		return domain.ClinicalNoteMutationResult{}, true, fmt.Errorf("%w: idempotency key was already used with a different request", domain.ErrConflict)
+	}
+	var result domain.ClinicalNoteMutationResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return domain.ClinicalNoteMutationResult{}, false, fmt.Errorf("decode idempotent response: %w", err)
+	}
+	result.Idempotent = true
+	return result, true, nil
+}
+
 func idempotentInvoiceResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string) (domain.InvoiceMutationResult, bool, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -2909,6 +3056,26 @@ func rememberLabOrderIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID s
 }
 
 func rememberPrescriptionIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.PrescriptionMutationResult) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode idempotent response: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		insert into idempotency_keys (tenant_id, key, request_hash, response_status, response_body)
+		values ($1, $2, $3, $4, $5)
+		on conflict (tenant_id, key) do nothing
+	`, tenantID, key, requestHash, status, body)
+	if err != nil {
+		return fmt.Errorf("record idempotency key: %w", err)
+	}
+	return nil
+}
+
+func rememberClinicalNoteIdempotentResult(ctx context.Context, tx pgx.Tx, tenantID string, key string, requestHash string, status int, result domain.ClinicalNoteMutationResult) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil

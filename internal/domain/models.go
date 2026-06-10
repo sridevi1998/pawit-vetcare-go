@@ -207,6 +207,24 @@ type ClinicalNote struct {
 	SharedWithPetParent bool   `json:"sharedWithPetParent"`
 }
 
+type CreateClinicalNoteInput struct {
+	LocationID          string         `json:"locationId"`
+	PetID               string         `json:"petId"`
+	AppointmentID       string         `json:"appointmentId,omitempty"`
+	ReasonForVisit      string         `json:"reasonForVisit,omitempty"`
+	Subjective          string         `json:"subjective,omitempty"`
+	Objective           string         `json:"objective,omitempty"`
+	Assessment          string         `json:"assessment,omitempty"`
+	Plan                string         `json:"plan,omitempty"`
+	Vitals              map[string]any `json:"vitals,omitempty"`
+	SharedWithPetParent bool           `json:"sharedWithPetParent,omitempty"`
+}
+
+type ClinicalNoteMutationResult struct {
+	ClinicalNote ClinicalNote `json:"clinicalNote"`
+	Idempotent   bool         `json:"idempotent,omitempty"`
+}
+
 type LabTest struct {
 	ID                  string         `json:"id"`
 	PetName             string         `json:"petName"`
