@@ -28,3 +28,31 @@ func TestCloudRunServiceInjectsRequiredProductionSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestCloudRunMigrationJobRunsLiquibaseWithRequiredSecrets(t *testing.T) {
+	manifest, err := os.ReadFile("../../deployments/cloud-run/migration-job.yaml")
+	if err != nil {
+		t.Fatalf("read Cloud Run migration job manifest: %v", err)
+	}
+
+	required := []string{
+		"name: pawit-vetcare-migrate",
+		"run.googleapis.com/execution-environment: gen2",
+		"run.googleapis.com/vpc-access-egress: private-ranges-only",
+		"maxRetries: 0",
+		"timeoutSeconds: 600",
+		"pawit-vetcare-liquibase:COMMIT_SHA",
+		"- update",
+		"name: LIQUIBASE_COMMAND_URL",
+		"name: pawit-liquibase-jdbc-url",
+		"name: LIQUIBASE_COMMAND_USERNAME",
+		"name: pawit-database-username",
+		"name: LIQUIBASE_COMMAND_PASSWORD",
+		"name: pawit-database-password",
+	}
+	for _, item := range required {
+		if !strings.Contains(string(manifest), item) {
+			t.Fatalf("Cloud Run migration job manifest is missing %q", item)
+		}
+	}
+}
