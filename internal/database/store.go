@@ -2,8 +2,11 @@ package database
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -34,6 +37,82 @@ func NewPostgresStore(pool *pgxpool.Pool) PostgresStore {
 
 func (s PostgresStore) Ready(ctx context.Context) error {
 	return s.pool.Ping(ctx)
+}
+
+func (s PostgresStore) Authenticate(ctx context.Context, input domain.LoginInput) (domain.AuthIdentity, error) {
+	email := strings.ToLower(strings.TrimSpace(input.Email))
+	password := strings.TrimSpace(input.Password)
+	tenantRef := strings.TrimSpace(input.TenantID)
+	if tenantRef == "" {
+		tenantRef = strings.TrimSpace(input.HospitalID)
+	}
+	role := input.Role
+	if email == "" || password == "" {
+		return domain.AuthIdentity{}, domain.ErrInvalidCredentials
+	}
+
+	query := `
+		select
+			u.id::text,
+			u.email,
+			u.display_name,
+			u.password_hash,
+			m.tenant_id::text,
+			r.code
+		from users u
+		join tenant_memberships m on m.user_id = u.id
+		join tenants t on t.id = m.tenant_id
+		join membership_roles mr on mr.membership_id = m.id
+		join roles r on r.id = mr.role_id
+		where u.email_normalized = $1
+			and u.status = 'active'
+			and u.archived_at is null
+			and m.status = 'active'
+			and m.archived_at is null
+			and (
+				$2::text = ''
+				or m.tenant_id::text = $2
+				or lower(t.name) = lower($2)
+				or lower(replace(t.name, ' ', '-')) = lower($2)
+			)
+			and ($3::text = '' or r.code = $3)
+		order by
+			case r.code
+				when 'ClinicAdmin' then 1
+				when 'Veterinarian' then 2
+				when 'Receptionist' then 3
+				else 10
+			end,
+			r.code
+		limit 1
+	`
+
+	var identity domain.AuthIdentity
+	var passwordHash string
+	var roleCode string
+	err := s.pool.QueryRow(ctx, query, email, tenantRef, string(role)).Scan(
+		&identity.UserID,
+		&identity.Email,
+		&identity.DisplayName,
+		&passwordHash,
+		&identity.TenantID,
+		&roleCode,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AuthIdentity{}, domain.ErrInvalidCredentials
+	}
+	if err != nil {
+		return domain.AuthIdentity{}, fmt.Errorf("read login identity: %w", err)
+	}
+	if !passwordMatches(passwordHash, password) {
+		return domain.AuthIdentity{}, domain.ErrInvalidCredentials
+	}
+
+	identity.Role = domain.Role(roleCode)
+	if _, err := s.pool.Exec(ctx, "update users set last_login_at = now(), updated_at = now() where id = $1", identity.UserID); err != nil {
+		return domain.AuthIdentity{}, fmt.Errorf("record login: %w", err)
+	}
+	return identity, nil
 }
 
 func (s PostgresStore) ProductSpec(ctx context.Context) (domain.ProductSpec, error) {
@@ -3492,6 +3571,35 @@ func nullString(value string) any {
 		return nil
 	}
 	return value
+}
+
+func passwordMatches(storedHash string, password string) bool {
+	if storedHash == "local-dev-only" {
+		return password == "local-dev-only"
+	}
+
+	parts := strings.Split(storedHash, "$")
+	if len(parts) != 4 || parts[0] != "pbkdf2-sha256" {
+		return false
+	}
+	iterations, err := strconv.Atoi(parts[1])
+	if err != nil || iterations < 100_000 {
+		return false
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
+	if err != nil || len(salt) < 8 {
+		return false
+	}
+	expected, err := base64.RawStdEncoding.DecodeString(parts[3])
+	if err != nil || len(expected) < 32 {
+		return false
+	}
+
+	actual, err := pbkdf2.Key(sha256.New, password, salt, iterations, len(expected))
+	if err != nil {
+		return false
+	}
+	return hmac.Equal(actual, expected)
 }
 
 func isUUID(value string) bool {

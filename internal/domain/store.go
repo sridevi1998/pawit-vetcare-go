@@ -7,6 +7,7 @@ import (
 
 type Store interface {
 	Ready(ctx context.Context) error
+	Authenticate(ctx context.Context, input LoginInput) (AuthIdentity, error)
 	ProductSpec(ctx context.Context) (ProductSpec, error)
 	RolePolicies(ctx context.Context) ([]RolePolicy, error)
 	Navigation(ctx context.Context, tenantID string) ([]NavSection, error)
@@ -54,6 +55,52 @@ func NewDemoStore() DemoStore {
 
 func (DemoStore) Ready(ctx context.Context) error {
 	return nil
+}
+
+func (DemoStore) Authenticate(ctx context.Context, input LoginInput) (AuthIdentity, error) {
+	email := strings.ToLower(strings.TrimSpace(input.Email))
+	password := strings.TrimSpace(input.Password)
+	if email == "" || password == "" {
+		return AuthIdentity{}, ErrInvalidCredentials
+	}
+
+	tenantID := strings.TrimSpace(input.TenantID)
+	if tenantID == "" {
+		tenantID = demoTenantForHospital(input.HospitalID)
+	}
+	role := input.Role
+	if role == "" {
+		role = RoleClinicAdmin
+	}
+
+	demoUsers := map[string]struct {
+		userID      string
+		displayName string
+		roles       []Role
+	}{
+		"admin@pawit.example":     {userID: "user_demo_admin", displayName: "Asha Clinic Admin", roles: []Role{RoleClinicAdmin}},
+		"doctor@pawit.example":    {userID: "user_demo_doctor", displayName: "Dr. Asha Rao", roles: []Role{RoleVeterinarian}},
+		"frontdesk@pawit.example": {userID: "user_demo_reception", displayName: "Riya Front Desk", roles: []Role{RoleReceptionist}},
+		"parent@pawit.example":    {userID: "user_demo_parent", displayName: "Avery Parker", roles: []Role{RolePetParent}},
+	}
+	user, ok := demoUsers[email]
+	if !ok || password != "pawit-demo" {
+		return AuthIdentity{}, ErrInvalidCredentials
+	}
+	if !roleIn(role, user.roles) {
+		return AuthIdentity{}, ErrInvalidCredentials
+	}
+
+	return AuthIdentity{UserID: user.userID, TenantID: tenantID, Role: role, DisplayName: user.displayName, Email: email}, nil
+}
+
+func demoTenantForHospital(hospitalID string) string {
+	switch strings.ToUpper(strings.TrimSpace(hospitalID)) {
+	case "", "HOSP-001":
+		return "tenant_demo_clinic"
+	default:
+		return strings.TrimSpace(hospitalID)
+	}
 }
 
 func (DemoStore) ProductSpec(ctx context.Context) (ProductSpec, error) {
@@ -493,4 +540,13 @@ func (DemoStore) AuditLogs(ctx context.Context, tenantID string) ([]AuditLogEntr
 			CreatedAt:    "2026-05-12T11:30:00Z",
 		},
 	}, nil
+}
+
+func roleIn(role Role, roles []Role) bool {
+	for _, item := range roles {
+		if item == role {
+			return true
+		}
+	}
+	return false
 }

@@ -30,8 +30,16 @@ Then call:
 
 ```sh
 curl http://localhost:8080/healthz
-curl -H "X-PawIt-Tenant-ID: tenant_demo_clinic" http://localhost:8080/api/v1/pets
+curl -i \
+  -H "Content-Type: application/json" \
+  -d '{"hospitalId":"HOSP-001","email":"admin@pawit.example","password":"pawit-demo","role":"ClinicAdmin"}' \
+  http://localhost:8080/api/v1/auth/login
 ```
+
+The in-memory demo store accepts these local login accounts with password
+`pawit-demo` and hospital ID `HOSP-001`: `admin@pawit.example` as `ClinicAdmin`, `doctor@pawit.example` as
+`Veterinarian`, `frontdesk@pawit.example` as `Receptionist`, and
+`parent@pawit.example` as `PetParent`.
 
 To run against local PostgreSQL instead of the in-memory demo store:
 
@@ -42,14 +50,14 @@ docker compose exec -T postgres psql -U pawit -d pawit < docs/database/local-dev
 PAWIT_ALLOW_DEV_AUTH=true PAWIT_DATABASE_URL=postgres://pawit:local-password@localhost:5432/pawit?sslmode=disable go run .
 ```
 
-Then use the seeded tenant, user, and role headers:
+Then log in with the seeded clinic admin. The local seed uses password
+`local-dev-only` and tenant `11111111-1111-1111-1111-111111111111`:
 
 ```sh
 curl \
-  -H "X-PawIt-Tenant-ID: 11111111-1111-1111-1111-111111111111" \
-  -H "X-PawIt-User-ID: 33333333-3333-3333-3333-333333333333" \
-  -H "X-PawIt-Role: ClinicAdmin" \
-  http://localhost:8080/api/v1/billing
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@pawit.example","password":"local-dev-only","tenantId":"11111111-1111-1111-1111-111111111111","role":"ClinicAdmin"}' \
+  http://localhost:8080/api/v1/auth/login
 ```
 
 ## Production Environment
