@@ -29,6 +29,14 @@ Pet-parent shared medical reads are owner-scoped. When a caller only has
 shared with the pet parent and attached to a pet where the caller is an active
 guardian with record-view access.
 
+Pet-parent pet record reads are also owner-scoped. When a caller only has
+`pet_record.manage_own`, pet record and pet document lists include only pets
+where the caller is an active guardian with record-view access.
+
+Pet-parent billing reads are owner-scoped. When a caller only has
+`invoice.pay_own`, billing metrics and invoice lists include only invoices
+attached to pets where the caller is an active guardian.
+
 ## Current API Endpoints
 
 | Method | Path | Purpose |
