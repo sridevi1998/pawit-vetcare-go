@@ -597,7 +597,12 @@ func (s PostgresStore) UpdateQueueStatus(ctx context.Context, tenantID string, a
 	return result, nil
 }
 
-func (s PostgresStore) Patients(ctx context.Context, tenantID string) ([]domain.PatientRecord, error) {
+func (s PostgresStore) Patients(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.PatientRecord, error) {
+	ownOnly, err := ownPetRecordReadOnly(actorRole)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.pool.Query(ctx, `
 		select
 			p.id::text,
@@ -624,10 +629,23 @@ func (s PostgresStore) Patients(ctx context.Context, tenantID string) ([]domain.
 			from appointments
 			where tenant_id = p.tenant_id and pet_id = p.id and status = 'completed'
 		) v on true
-		where p.tenant_id = $1 and p.archived_at is null
+		where p.tenant_id = $1
+			and p.archived_at is null
+			and (
+				$2::boolean = false
+				or exists (
+					select 1
+					from pet_guardians pg
+					where pg.tenant_id = p.tenant_id
+						and pg.pet_id = p.id
+						and pg.user_id = $3
+						and pg.can_view_records = true
+						and pg.archived_at is null
+				)
+			)
 		order by p.name
 		limit 250
-	`, tenantID)
+	`, tenantID, ownOnly, uuidOrNil(actorUserID))
 	if err != nil {
 		return nil, fmt.Errorf("read patients: %w", err)
 	}
@@ -797,9 +815,18 @@ func (s PostgresStore) ArchivePet(ctx context.Context, tenantID string, actorUse
 	return result, nil
 }
 
-func (s PostgresStore) PetDocuments(ctx context.Context, tenantID string, petID string) ([]domain.PetDocument, error) {
+func (s PostgresStore) PetDocuments(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string) ([]domain.PetDocument, error) {
+	ownOnly, err := ownPetRecordReadOnly(actorRole)
+	if err != nil && !roleHasAny(actorRole, domain.PermissionPetDocumentUpload) {
+		return nil, err
+	}
 	if _, err := patientByID(ctx, s.pool, tenantID, petID); err != nil {
 		return nil, err
+	}
+	if ownOnly || (actorRole == domain.RolePetParent && !roleHasAny(actorRole, domain.PermissionPetRecordManage)) {
+		if err := requirePetGuardianAccess(ctx, s.pool, tenantID, petID, actorUserID, true); err != nil {
+			return nil, err
+		}
 	}
 
 	rows, err := s.pool.Query(ctx, `
@@ -842,6 +869,11 @@ func (s PostgresStore) PetDocuments(ctx context.Context, tenantID string, petID 
 func (s PostgresStore) UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, input domain.UploadPetDocumentInput, idempotencyKey string) (domain.PetDocumentMutationResult, error) {
 	if !roleHasAny(actorRole, domain.PermissionPetDocumentUpload) {
 		return domain.PetDocumentMutationResult{}, domain.ErrForbidden
+	}
+	if actorRole == domain.RolePetParent {
+		if err := requirePetGuardianAccess(ctx, s.pool, tenantID, petID, actorUserID, true); err != nil {
+			return domain.PetDocumentMutationResult{}, err
+		}
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -1761,24 +1793,96 @@ func (s PostgresStore) UploadLabResult(ctx context.Context, tenantID string, act
 	return result, nil
 }
 
-func (s PostgresStore) Billing(ctx context.Context, tenantID string) (map[string]any, error) {
-	today, err := s.sumCents(ctx, "select coalesce(sum(total_cents), 0) from invoices where tenant_id = $1 and status = 'paid' and paid_at::date = current_date", tenantID)
+func (s PostgresStore) Billing(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) (map[string]any, error) {
+	ownOnly, err := ownInvoiceReadOnly(actorRole)
 	if err != nil {
 		return nil, err
 	}
-	pending, err := s.sumCents(ctx, "select coalesce(sum(total_cents), 0) from invoices where tenant_id = $1 and status in ('issued', 'pending')", tenantID)
+	actorID := uuidOrNil(actorUserID)
+
+	today, err := s.sumCents(ctx, `
+		select coalesce(sum(total_cents), 0)
+		from invoices i
+		where i.tenant_id = $1
+			and i.status = 'paid'
+			and i.paid_at::date = current_date
+			and (
+				$2::boolean = false
+				or exists (
+					select 1
+					from pet_guardians pg
+					where pg.tenant_id = i.tenant_id
+						and pg.pet_id = i.pet_id
+						and pg.user_id = $3
+						and pg.archived_at is null
+				)
+			)
+	`, tenantID, ownOnly, actorID)
 	if err != nil {
 		return nil, err
 	}
-	allTime, err := s.sumCents(ctx, "select coalesce(sum(total_cents), 0) from invoices where tenant_id = $1 and status = 'paid'", tenantID)
+	pending, err := s.sumCents(ctx, `
+		select coalesce(sum(total_cents), 0)
+		from invoices i
+		where i.tenant_id = $1
+			and i.status in ('issued', 'pending')
+			and (
+				$2::boolean = false
+				or exists (
+					select 1
+					from pet_guardians pg
+					where pg.tenant_id = i.tenant_id
+						and pg.pet_id = i.pet_id
+						and pg.user_id = $3
+						and pg.archived_at is null
+				)
+			)
+	`, tenantID, ownOnly, actorID)
 	if err != nil {
 		return nil, err
 	}
-	overdue, err := s.count(ctx, "select count(*) from invoices where tenant_id = $1 and status in ('issued', 'pending') and due_at < now() - interval '30 days'", tenantID)
+	allTime, err := s.sumCents(ctx, `
+		select coalesce(sum(total_cents), 0)
+		from invoices i
+		where i.tenant_id = $1
+			and i.status = 'paid'
+			and (
+				$2::boolean = false
+				or exists (
+					select 1
+					from pet_guardians pg
+					where pg.tenant_id = i.tenant_id
+						and pg.pet_id = i.pet_id
+						and pg.user_id = $3
+						and pg.archived_at is null
+				)
+			)
+	`, tenantID, ownOnly, actorID)
 	if err != nil {
 		return nil, err
 	}
-	invoices, err := s.invoices(ctx, tenantID)
+	overdue, err := s.count(ctx, `
+		select count(*)
+		from invoices i
+		where i.tenant_id = $1
+			and i.status in ('issued', 'pending')
+			and i.due_at < now() - interval '30 days'
+			and (
+				$2::boolean = false
+				or exists (
+					select 1
+					from pet_guardians pg
+					where pg.tenant_id = i.tenant_id
+						and pg.pet_id = i.pet_id
+						and pg.user_id = $3
+						and pg.archived_at is null
+				)
+			)
+	`, tenantID, ownOnly, actorID)
+	if err != nil {
+		return nil, err
+	}
+	invoices, err := s.invoices(ctx, tenantID, ownOnly, actorID)
 	if err != nil {
 		return nil, err
 	}
@@ -2189,23 +2293,23 @@ func (s PostgresStore) AuditLogs(ctx context.Context, tenantID string) ([]domain
 	return items, nil
 }
 
-func (s PostgresStore) count(ctx context.Context, query string, tenantID string) (int64, error) {
+func (s PostgresStore) count(ctx context.Context, query string, args ...any) (int64, error) {
 	var value int64
-	if err := s.pool.QueryRow(ctx, query, tenantID).Scan(&value); err != nil {
+	if err := s.pool.QueryRow(ctx, query, args...).Scan(&value); err != nil {
 		return 0, fmt.Errorf("read count: %w", err)
 	}
 	return value, nil
 }
 
-func (s PostgresStore) sumCents(ctx context.Context, query string, tenantID string) (int64, error) {
+func (s PostgresStore) sumCents(ctx context.Context, query string, args ...any) (int64, error) {
 	var value int64
-	if err := s.pool.QueryRow(ctx, query, tenantID).Scan(&value); err != nil {
+	if err := s.pool.QueryRow(ctx, query, args...).Scan(&value); err != nil {
 		return 0, fmt.Errorf("read amount: %w", err)
 	}
 	return value, nil
 }
 
-func (s PostgresStore) invoices(ctx context.Context, tenantID string) ([]domain.Invoice, error) {
+func (s PostgresStore) invoices(ctx context.Context, tenantID string, ownOnly bool, actorUserID any) ([]domain.Invoice, error) {
 	rows, err := s.pool.Query(ctx, `
 		select
 			i.id::text,
@@ -2224,9 +2328,20 @@ func (s PostgresStore) invoices(ctx context.Context, tenantID string) ([]domain.
 			limit 1
 		) g on true
 		where i.tenant_id = $1
+			and (
+				$2::boolean = false
+				or exists (
+					select 1
+					from pet_guardians pg
+					where pg.tenant_id = i.tenant_id
+						and pg.pet_id = i.pet_id
+						and pg.user_id = $3
+						and pg.archived_at is null
+				)
+			)
 		order by i.created_at desc
 		limit 100
-	`, tenantID)
+	`, tenantID, ownOnly, actorUserID)
 	if err != nil {
 		return nil, fmt.Errorf("read invoices: %w", err)
 	}
@@ -2737,6 +2852,51 @@ func sharedLabResultReadOnly(role domain.Role) (bool, error) {
 		return true, nil
 	}
 	return false, domain.ErrForbidden
+}
+
+func ownPetRecordReadOnly(role domain.Role) (bool, error) {
+	if roleHasAny(role, domain.PermissionPetRecordManage) {
+		return false, nil
+	}
+	if roleHasAny(role, domain.PermissionPetRecordManageOwn) {
+		return true, nil
+	}
+	return false, domain.ErrForbidden
+}
+
+func ownInvoiceReadOnly(role domain.Role) (bool, error) {
+	if roleHasAny(role, domain.PermissionInvoiceCreate, domain.PermissionInvoiceManage, domain.PermissionPaymentRefundVoid) {
+		return false, nil
+	}
+	if roleHasAny(role, domain.PermissionInvoicePayOwn) {
+		return true, nil
+	}
+	return false, domain.ErrForbidden
+}
+
+func requirePetGuardianAccess(ctx context.Context, q rowQuerier, tenantID string, petID string, actorUserID string, requireRecordView bool) error {
+	if !isUUID(actorUserID) {
+		return domain.ErrForbidden
+	}
+	var exists bool
+	err := q.QueryRow(ctx, `
+		select exists (
+			select 1
+			from pet_guardians
+			where tenant_id = $1
+				and pet_id = $2
+				and user_id = $3
+				and archived_at is null
+				and ($4::boolean = false or can_view_records = true)
+		)
+	`, tenantID, petID, actorUserID, requireRecordView).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("check pet guardian access: %w", err)
+	}
+	if !exists {
+		return domain.ErrNotFound
+	}
+	return nil
 }
 
 func validManagedStaffRole(role domain.Role) bool {

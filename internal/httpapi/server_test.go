@@ -93,6 +93,7 @@ func TestAPIAllowsTenantScopedDevAuth(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/patients", nil)
 	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleClinicAdmin))
 	response := httptest.NewRecorder()
 
 	server.ServeHTTP(response, request)
@@ -149,6 +150,7 @@ func TestRateLimitReturnsContractErrorEnvelope(t *testing.T) {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/patients", nil)
 		request.RemoteAddr = "203.0.113.20:443"
 		request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+		request.Header.Set("X-PawIt-Role", string(domain.RoleClinicAdmin))
 		response := httptest.NewRecorder()
 
 		server.ServeHTTP(response, request)
@@ -179,6 +181,7 @@ func TestPetsEndpointAliasesPetRecords(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/pets", nil)
 	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleClinicAdmin))
 	response := httptest.NewRecorder()
 
 	server.ServeHTTP(response, request)
@@ -791,6 +794,95 @@ func TestPetParentSharedMedicalReadsForwardActorScope(t *testing.T) {
 	}
 }
 
+func TestPetParentPetRecordReadsForwardActorScope(t *testing.T) {
+	store := &readScopeRecordingStore{}
+	server := NewServer(testConfig(), store)
+
+	tests := []struct {
+		name string
+		path string
+		call string
+	}{
+		{name: "pets", path: "/api/v1/pets", call: "Patients"},
+		{name: "pet documents", path: "/api/v1/pets/pet_001/documents", call: "PetDocuments"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store.calls = nil
+			request := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+			request.Header.Set("X-PawIt-User-ID", "guardian_user_001")
+			request.Header.Set("X-PawIt-Role", string(domain.RolePetParent))
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+			}
+			if len(store.calls) != 1 {
+				t.Fatalf("expected one read call, got %#v", store.calls)
+			}
+			call := store.calls[0]
+			if call.name != tt.call || call.actorUserID != "guardian_user_001" || call.actorRole != domain.RolePetParent {
+				t.Fatalf("unexpected read scope %#v", call)
+			}
+		})
+	}
+}
+
+func TestPetParentBillingReadsForwardActorScope(t *testing.T) {
+	store := &readScopeRecordingStore{}
+	server := NewServer(testConfig(), store)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/billing", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-User-ID", "guardian_user_001")
+	request.Header.Set("X-PawIt-Role", string(domain.RolePetParent))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+	if len(store.calls) != 1 {
+		t.Fatalf("expected one read call, got %#v", store.calls)
+	}
+	call := store.calls[0]
+	if call.name != "Billing" || call.actorUserID != "guardian_user_001" || call.actorRole != domain.RolePetParent {
+		t.Fatalf("unexpected read scope %#v", call)
+	}
+}
+
+func TestPatientsRejectsRoleWithoutReadPermission(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/pets", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", "BillingStaff")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
+func TestBillingRejectsRoleWithoutReadPermission(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/billing", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleLabTechnician))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
 func TestClinicalNotesRejectsRoleWithoutReadPermission(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/clinical-notes", nil)
@@ -1324,6 +1416,21 @@ type recordedReadScopeCall struct {
 type readScopeRecordingStore struct {
 	domain.DemoStore
 	calls []recordedReadScopeCall
+}
+
+func (s *readScopeRecordingStore) Patients(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.PatientRecord, error) {
+	s.calls = append(s.calls, recordedReadScopeCall{name: "Patients", actorUserID: actorUserID, actorRole: actorRole})
+	return s.DemoStore.Patients(ctx, tenantID, actorUserID, actorRole)
+}
+
+func (s *readScopeRecordingStore) PetDocuments(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string) ([]domain.PetDocument, error) {
+	s.calls = append(s.calls, recordedReadScopeCall{name: "PetDocuments", actorUserID: actorUserID, actorRole: actorRole})
+	return s.DemoStore.PetDocuments(ctx, tenantID, actorUserID, actorRole, petID)
+}
+
+func (s *readScopeRecordingStore) Billing(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) (map[string]any, error) {
+	s.calls = append(s.calls, recordedReadScopeCall{name: "Billing", actorUserID: actorUserID, actorRole: actorRole})
+	return s.DemoStore.Billing(ctx, tenantID, actorUserID, actorRole)
 }
 
 func (s *readScopeRecordingStore) Prescriptions(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.Prescription, error) {

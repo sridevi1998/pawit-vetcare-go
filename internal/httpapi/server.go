@@ -261,7 +261,12 @@ func (s *Server) updateQueueStatus(w http.ResponseWriter, r *http.Request, statu
 
 func (s *Server) patients(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
-	items, err := s.store.Patients(r.Context(), auth.TenantID)
+	if !roleCan(auth.Role, domain.PermissionPetRecordManage, domain.PermissionPetRecordManageOwn) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot view pet records.")
+		return
+	}
+
+	items, err := s.store.Patients(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role))
 	writeData(w, map[string]any{"items": items}, err)
 }
 
@@ -353,7 +358,7 @@ func (s *Server) petDocuments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := s.store.PetDocuments(r.Context(), auth.TenantID, id)
+	items, err := s.store.PetDocuments(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), id)
 	writeData(w, map[string]any{"items": items}, err)
 }
 
@@ -597,7 +602,12 @@ func (s *Server) uploadLabResult(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) billing(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
-	payload, err := s.store.Billing(r.Context(), auth.TenantID)
+	if !roleCan(auth.Role, domain.PermissionInvoiceCreate, domain.PermissionInvoiceManage, domain.PermissionPaymentRefundVoid, domain.PermissionInvoicePayOwn) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot view billing records.")
+		return
+	}
+
+	payload, err := s.store.Billing(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role))
 	writeData(w, payload, err)
 }
 

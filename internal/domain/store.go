@@ -18,10 +18,10 @@ type Store interface {
 	Queue(ctx context.Context, tenantID string) ([]QueueEntry, error)
 	RegisterWalkIn(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input RegisterWalkInInput, idempotencyKey string) (QueueMutationResult, error)
 	UpdateQueueStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, queueID string, status QueueStatus, input UpdateQueueInput, idempotencyKey string) (QueueMutationResult, error)
-	Patients(ctx context.Context, tenantID string) ([]PatientRecord, error)
+	Patients(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]PatientRecord, error)
 	CreatePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreatePetInput, idempotencyKey string) (PetMutationResult, error)
 	ArchivePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input ArchivePetInput, idempotencyKey string) (PetMutationResult, error)
-	PetDocuments(ctx context.Context, tenantID string, petID string) ([]PetDocument, error)
+	PetDocuments(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string) ([]PetDocument, error)
 	UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input UploadPetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error)
 	ArchivePetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, documentID string, input ArchivePetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error)
 	Prescriptions(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]Prescription, error)
@@ -35,7 +35,7 @@ type Store interface {
 	CreateLabOrder(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateLabOrderInput, idempotencyKey string) (LabOrderMutationResult, error)
 	UpdateLabOrderStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UpdateLabOrderStatusInput, idempotencyKey string) (LabOrderMutationResult, error)
 	UploadLabResult(ctx context.Context, tenantID string, actorUserID string, actorRole Role, labOrderID string, input UploadLabResultInput, idempotencyKey string) (LabOrderMutationResult, error)
-	Billing(ctx context.Context, tenantID string) (map[string]any, error)
+	Billing(ctx context.Context, tenantID string, actorUserID string, actorRole Role) (map[string]any, error)
 	CreateInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateInvoiceInput, idempotencyKey string) (InvoiceMutationResult, error)
 	VoidInvoice(ctx context.Context, tenantID string, actorUserID string, actorRole Role, invoiceID string, input VoidInvoiceInput, idempotencyKey string) (InvoiceMutationResult, error)
 	Analytics(ctx context.Context, tenantID string) (Analytics, error)
@@ -201,7 +201,7 @@ func (DemoStore) UpdateQueueStatus(ctx context.Context, tenantID string, actorUs
 	}}, nil
 }
 
-func (DemoStore) Patients(ctx context.Context, tenantID string) ([]PatientRecord, error) {
+func (DemoStore) Patients(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]PatientRecord, error) {
 	return []PatientRecord{
 		{ID: "pet_001", PetName: "Milo", OwnerName: "Avery Parker", Species: string(SpeciesCat), Breed: "Domestic Shorthair", Age: "3y", Sex: "Male", Phone: "+13125550110", LastVisit: "2026-05-01", VaccinesDue: 1, OpenPlans: 0, GuardianCount: 2, DocumentsCount: 3},
 		{ID: "pet_002", PetName: "Bruno", OwnerName: "Jordan Ellis", Species: string(SpeciesDog), Breed: "Labrador Retriever", Age: "5y", Sex: "Male", Phone: "+14155550192", LastVisit: "No visits", VaccinesDue: 0, OpenPlans: 1, GuardianCount: 1, DocumentsCount: 1},
@@ -227,7 +227,7 @@ func (DemoStore) ArchivePet(ctx context.Context, tenantID string, actorUserID st
 	return PetMutationResult{Pet: PatientRecord{ID: petID, PetName: "Archived Demo Pet"}}, nil
 }
 
-func (DemoStore) PetDocuments(ctx context.Context, tenantID string, petID string) ([]PetDocument, error) {
+func (DemoStore) PetDocuments(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string) ([]PetDocument, error) {
 	return []PetDocument{
 		{ID: "doc_001", PetID: petID, Title: "Rabies certificate", DocumentType: "vaccine_history", ObjectPath: "tenant_demo/pets/doc_001/rabies.pdf", ContentType: "application/pdf", SizeBytes: 1024, Status: "active", CreatedAt: "2026-05-12T10:00:00Z"},
 	}, nil
@@ -375,7 +375,7 @@ func (DemoStore) UploadLabResult(ctx context.Context, tenantID string, actorUser
 	}}, nil
 }
 
-func (DemoStore) Billing(ctx context.Context, tenantID string) (map[string]any, error) {
+func (DemoStore) Billing(ctx context.Context, tenantID string, actorUserID string, actorRole Role) (map[string]any, error) {
 	return map[string]any{
 		"metrics": []Metric{
 			{Label: "Total Revenue Today", Value: "$0.00", Delta: "No payments today", Tone: "green"},
