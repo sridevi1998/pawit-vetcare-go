@@ -35,6 +35,10 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if publicAuthPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 
 		token := bearerToken(r)
 		if token == "" {
@@ -90,7 +94,8 @@ func (s *Server) validateToken(token string) (AuthContext, error) {
 	if token == "" {
 		return AuthContext{}, errors.New("missing token")
 	}
-	if s.cfg.JWTSigningKey == "" {
+	signingKey := s.jwtSigningKey()
+	if signingKey == "" {
 		return AuthContext{}, errors.New("missing signing key")
 	}
 
@@ -113,7 +118,7 @@ func (s *Server) validateToken(token string) (AuthContext, error) {
 		return AuthContext{}, errors.New("unsupported token algorithm")
 	}
 
-	mac := hmac.New(sha256.New, []byte(s.cfg.JWTSigningKey))
+	mac := hmac.New(sha256.New, []byte(signingKey))
 	mac.Write([]byte(parts[0] + "." + parts[1]))
 	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	if !hmac.Equal([]byte(expected), []byte(parts[2])) {
@@ -142,4 +147,80 @@ func (s *Server) validateToken(token string) (AuthContext, error) {
 	}
 
 	return AuthContext{UserID: claims.Subject, Role: claims.Role, TenantID: claims.TenantID}, nil
+}
+
+func (s *Server) signToken(auth AuthContext, expiresAt time.Time) (string, error) {
+	signingKey := s.jwtSigningKey()
+	if signingKey == "" {
+		return "", errors.New("missing signing key")
+	}
+
+	header, err := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})
+	if err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"sub":       auth.UserID,
+		"role":      auth.Role,
+		"tenant_id": auth.TenantID,
+		"exp":       expiresAt.Unix(),
+		"iat":       time.Now().Unix(),
+	})
+	if err != nil {
+		return "", err
+	}
+
+	encodedHeader := base64.RawURLEncoding.EncodeToString(header)
+	encodedPayload := base64.RawURLEncoding.EncodeToString(payload)
+	unsigned := encodedHeader + "." + encodedPayload
+
+	mac := hmac.New(sha256.New, []byte(signingKey))
+	mac.Write([]byte(unsigned))
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return unsigned + "." + signature, nil
+}
+
+func (s *Server) jwtSigningKey() string {
+	if s.cfg.JWTSigningKey != "" {
+		return s.cfg.JWTSigningKey
+	}
+	if s.cfg.AllowDevAuth && !s.cfg.IsProduction() {
+		return "pawit-local-development-signing-key"
+	}
+	return ""
+}
+
+func publicAuthPath(path string) bool {
+	switch path {
+	case "/api/v1/auth/login", "/api/v1/auth/logout":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) authCookie(token string, expiresAt time.Time) *http.Cookie {
+	return &http.Cookie{
+		Name:     "pawit_access",
+		Value:    token,
+		Path:     "/",
+		Expires:  expiresAt,
+		MaxAge:   int(time.Until(expiresAt).Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   s.cfg.IsProduction(),
+	}
+}
+
+func (s *Server) expiredAuthCookie() *http.Cookie {
+	return &http.Cookie{
+		Name:     "pawit_access",
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0).UTC(),
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   s.cfg.IsProduction(),
+	}
 }

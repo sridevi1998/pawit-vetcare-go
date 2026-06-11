@@ -14,6 +14,11 @@ All application endpoints require:
 - JWTs must be signed with `HS256` using the configured PawIt signing key
 - In local development only, `X-PawIt-Tenant-ID` is accepted when `PAWIT_ALLOW_DEV_AUTH=true`
 
+Public auth endpoints do not require an existing session. `POST /auth/login`
+verifies email, password, hospital/tenant, and role, then sets the `pawit_access`
+HttpOnly cookie and returns the session context. `POST /auth/logout` expires the
+same cookie.
+
 All endpoints can return the shared error envelope for authentication, authorization,
 validation, conflict, not found, dependency, and rate-limit failures. Rate-limit
 responses use HTTP `429` with error code `rate_limited` and include a
@@ -41,6 +46,8 @@ attached to pets where the caller is an active guardian.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `POST` | `/auth/login` | Create a role-scoped authenticated session |
+| `POST` | `/auth/logout` | Clear the authenticated session cookie |
 | `GET` | `/me` | Current user, role, tenant, and clinic context |
 | `GET` | `/product-spec` | Approved v1 product policy: species, statuses, payment provider, telemedicine, labs, cancellation |
 | `GET` | `/role-policies` | Role and permission policy matrix from the spec |

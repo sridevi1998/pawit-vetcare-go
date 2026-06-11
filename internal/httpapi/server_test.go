@@ -103,6 +103,68 @@ func TestAPIAllowsTenantScopedDevAuth(t *testing.T) {
 	}
 }
 
+func TestLoginIssuesRoleScopedSessionCookie(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"hospitalId":"HOSP-001","email":"doctor@pawit.example","password":"pawit-demo","role":"Veterinarian"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+	cookie := response.Result().Cookies()[0]
+	if cookie.Name != "pawit_access" || cookie.Value == "" || !cookie.HttpOnly {
+		t.Fatalf("expected http-only pawit_access cookie, got %#v", cookie)
+	}
+
+	var session domain.AuthSession
+	if err := json.Unmarshal(response.Body.Bytes(), &session); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if session.Role != domain.RoleVeterinarian || session.UserID != "user_demo_doctor" || session.Token == "" {
+		t.Fatalf("unexpected session %#v", session)
+	}
+
+	meRequest := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	meRequest.AddCookie(cookie)
+	meResponse := httptest.NewRecorder()
+	server.ServeHTTP(meResponse, meRequest)
+	if meResponse.Code != http.StatusOK {
+		t.Fatalf("expected cookie-authenticated /me status %d, got %d: %s", http.StatusOK, meResponse.Code, meResponse.Body.String())
+	}
+}
+
+func TestLoginRejectsUnassignedRole(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"hospitalId":"HOSP-001","email":"doctor@pawit.example","password":"pawit-demo","role":"ClinicAdmin"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusUnauthorized, response.Code, response.Body.String())
+	}
+}
+
+func TestLogoutClearsSessionCookie(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+	cookie := response.Result().Cookies()[0]
+	if cookie.Name != "pawit_access" || cookie.MaxAge >= 0 || cookie.Value != "" {
+		t.Fatalf("expected expired pawit_access cookie, got %#v", cookie)
+	}
+}
+
 func TestClientIPIgnoresForwardedHeadersFromUntrustedRemote(t *testing.T) {
 	cfg := testConfig()
 	server := &Server{cfg: cfg}

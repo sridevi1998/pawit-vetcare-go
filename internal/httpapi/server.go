@@ -34,6 +34,8 @@ func NewServer(cfg config.Config, store domain.Store) http.Handler {
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /readyz", s.ready)
+	s.mux.HandleFunc("POST /api/v1/auth/login", s.login)
+	s.mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
 	s.mux.HandleFunc("GET /api/v1/me", s.me)
 	s.mux.HandleFunc("GET /api/v1/product-spec", s.productSpec)
 	s.mux.HandleFunc("GET /api/v1/role-policies", s.rolePolicies)
@@ -77,6 +79,58 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/staff", s.createStaff)
 	s.mux.HandleFunc("GET /api/v1/audit-logs", s.auditLogs)
 	s.mux.HandleFunc("/", s.notFound)
+}
+
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	var input domain.LoginInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	input.Email = strings.TrimSpace(input.Email)
+	input.Password = strings.TrimSpace(input.Password)
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	input.HospitalID = strings.TrimSpace(input.HospitalID)
+	if input.Email == "" || input.Password == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Email and password are required.")
+		return
+	}
+
+	identity, err := s.store.Authenticate(r.Context(), input)
+	if err != nil {
+		if errors.Is(err, domain.ErrInvalidCredentials) {
+			writeError(w, http.StatusUnauthorized, "invalid_credentials", "Email, password, tenant, or role is invalid.")
+			return
+		}
+		slog.Error("login failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "PawIt could not complete the login request.")
+		return
+	}
+
+	expiresAt := time.Now().UTC().Add(12 * time.Hour)
+	auth := AuthContext{UserID: identity.UserID, TenantID: identity.TenantID, Role: string(identity.Role)}
+	token, err := s.signToken(auth, expiresAt)
+	if err != nil {
+		slog.Error("token signing failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "PawIt could not create a login session.")
+		return
+	}
+
+	http.SetCookie(w, s.authCookie(token, expiresAt))
+	writeJSON(w, http.StatusOK, domain.AuthSession{
+		UserID:      identity.UserID,
+		TenantID:    identity.TenantID,
+		Role:        identity.Role,
+		DisplayName: identity.DisplayName,
+		Email:       identity.Email,
+		Token:       token,
+		ExpiresAt:   expiresAt.Format(time.RFC3339),
+	})
+}
+
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, s.expiredAuthCookie())
+	writeJSON(w, http.StatusOK, map[string]any{"status": "signed_out"})
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

@@ -326,6 +326,32 @@ type StaffMutationResult struct {
 	Idempotent  bool   `json:"idempotent,omitempty"`
 }
 
+type LoginInput struct {
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+	TenantID   string `json:"tenantId,omitempty"`
+	HospitalID string `json:"hospitalId,omitempty"`
+	Role       Role   `json:"role,omitempty"`
+}
+
+type AuthIdentity struct {
+	UserID      string `json:"userId"`
+	TenantID    string `json:"tenantId"`
+	Role        Role   `json:"role"`
+	DisplayName string `json:"displayName"`
+	Email       string `json:"email"`
+}
+
+type AuthSession struct {
+	UserID      string `json:"userId"`
+	TenantID    string `json:"tenantId"`
+	Role        Role   `json:"role"`
+	DisplayName string `json:"displayName"`
+	Email       string `json:"email"`
+	Token       string `json:"token"`
+	ExpiresAt   string `json:"expiresAt"`
+}
+
 type AuditLogEntry struct {
 	ID           string `json:"id"`
 	ActorUserID  string `json:"actorUserId,omitempty"`
