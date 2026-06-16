@@ -18,6 +18,15 @@ type NavItem struct {
 	Icon  string `json:"icon"`
 }
 
+type ClinicLocation struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Timezone string `json:"timezone"`
+	Phone    string `json:"phone,omitempty"`
+	Email    string `json:"email,omitempty"`
+	Status   string `json:"status"`
+}
+
 type Appointment struct {
 	ID                      string            `json:"id"`
 	PetName                 string            `json:"petName"`

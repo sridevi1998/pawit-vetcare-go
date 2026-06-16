@@ -737,6 +737,34 @@ func TestCreateAppointmentAllowsPetParentRequests(t *testing.T) {
 	}
 }
 
+func TestLocationsAllowPetParentAppointmentRequests(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/locations", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RolePetParent))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+}
+
+func TestLocationsRejectRoleWithoutLocationWorkflow(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/locations", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", "BillingStaff")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, response.Code)
+	}
+}
+
 func TestCreateAppointmentRejectsUnsupportedRole(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	body := `{"locationId":"loc_001","petId":"pet_001","type":"in_clinic","reason":"Visit"}`
@@ -763,6 +791,31 @@ func TestCancelAppointmentRequiresReason(t *testing.T) {
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
+	}
+}
+
+func TestCancelAppointmentReturnsContractAppointmentShape(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/appointments/apt_001/cancel", strings.NewReader(`{"reason":"guardian requested cancellation"}`))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RolePetParent))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+
+	var payload domain.AppointmentMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Appointment.Type == "" {
+		t.Fatal("expected appointment type to satisfy contract enum")
+	}
+	if payload.Appointment.AdditionalVeterinarians == nil {
+		t.Fatal("expected additionalVeterinarians array, got nil")
 	}
 }
 
@@ -829,6 +882,44 @@ func TestPetParentSharedMedicalReadsForwardActorScope(t *testing.T) {
 		{name: "prescriptions", path: "/api/v1/prescriptions", call: "Prescriptions"},
 		{name: "clinical notes", path: "/api/v1/clinical-notes", call: "ClinicalNotes"},
 		{name: "lab tests", path: "/api/v1/lab-tests", call: "LabTests"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store.calls = nil
+			request := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+			request.Header.Set("X-PawIt-User-ID", "guardian_user_001")
+			request.Header.Set("X-PawIt-Role", string(domain.RolePetParent))
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+			}
+			if len(store.calls) != 1 {
+				t.Fatalf("expected one read call, got %#v", store.calls)
+			}
+			call := store.calls[0]
+			if call.name != tt.call || call.actorUserID != "guardian_user_001" || call.actorRole != domain.RolePetParent {
+				t.Fatalf("unexpected read scope %#v", call)
+			}
+		})
+	}
+}
+
+func TestPetParentAppointmentReadsForwardActorScope(t *testing.T) {
+	store := &readScopeRecordingStore{}
+	server := NewServer(testConfig(), store)
+
+	tests := []struct {
+		name string
+		path string
+		call string
+	}{
+		{name: "appointments", path: "/api/v1/appointments", call: "Appointments"},
+		{name: "calendar", path: "/api/v1/calendar", call: "Calendar"},
 	}
 
 	for _, tt := range tests {
@@ -1483,6 +1574,16 @@ type readScopeRecordingStore struct {
 func (s *readScopeRecordingStore) Patients(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.PatientRecord, error) {
 	s.calls = append(s.calls, recordedReadScopeCall{name: "Patients", actorUserID: actorUserID, actorRole: actorRole})
 	return s.DemoStore.Patients(ctx, tenantID, actorUserID, actorRole)
+}
+
+func (s *readScopeRecordingStore) Appointments(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.Appointment, error) {
+	s.calls = append(s.calls, recordedReadScopeCall{name: "Appointments", actorUserID: actorUserID, actorRole: actorRole})
+	return s.DemoStore.Appointments(ctx, tenantID, actorUserID, actorRole)
+}
+
+func (s *readScopeRecordingStore) Calendar(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) (map[string]any, error) {
+	s.calls = append(s.calls, recordedReadScopeCall{name: "Calendar", actorUserID: actorUserID, actorRole: actorRole})
+	return s.DemoStore.Calendar(ctx, tenantID, actorUserID, actorRole)
 }
 
 func (s *readScopeRecordingStore) PetDocuments(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string) ([]domain.PetDocument, error) {

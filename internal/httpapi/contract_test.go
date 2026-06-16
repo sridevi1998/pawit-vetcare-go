@@ -41,6 +41,13 @@ func TestHospitalPortalReadResponseContracts(t *testing.T) {
 			itemKeys:  []string{"label", "items"},
 		},
 		{
+			name:      "locations",
+			path:      "/api/v1/locations",
+			topKeys:   []string{"items"},
+			listField: "items",
+			itemKeys:  []string{"id", "name", "timezone", "status"},
+		},
+		{
 			name:      "dashboard summary",
 			path:      "/api/v1/dashboard/summary",
 			topKeys:   []string{"metrics"},

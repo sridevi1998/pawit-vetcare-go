@@ -40,6 +40,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/product-spec", s.productSpec)
 	s.mux.HandleFunc("GET /api/v1/role-policies", s.rolePolicies)
 	s.mux.HandleFunc("GET /api/v1/navigation", s.navigation)
+	s.mux.HandleFunc("GET /api/v1/locations", s.locations)
 	s.mux.HandleFunc("GET /api/v1/dashboard/summary", s.summary)
 	s.mux.HandleFunc("GET /api/v1/appointments", s.appointments)
 	s.mux.HandleFunc("POST /api/v1/appointments", s.createAppointment)
@@ -171,6 +172,29 @@ func (s *Server) navigation(w http.ResponseWriter, r *http.Request) {
 	writeData(w, map[string]any{"sections": sections}, err)
 }
 
+func (s *Server) locations(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role,
+		domain.PermissionLocationManage,
+		domain.PermissionAppointmentManage,
+		domain.PermissionAppointmentRequestOwn,
+		domain.PermissionQueueManage,
+		domain.PermissionPetRecordManage,
+		domain.PermissionPetRecordManageOwn,
+		domain.PermissionClinicalNoteDraft,
+		domain.PermissionPrescriptionDraft,
+		domain.PermissionLabOrderCreate,
+		domain.PermissionLabOrderProcess,
+		domain.PermissionInvoiceCreate,
+		domain.PermissionStaffManage,
+	) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot view clinic locations.")
+		return
+	}
+	items, err := s.store.Locations(r.Context(), auth.TenantID)
+	writeData(w, map[string]any{"items": items}, err)
+}
+
 func (s *Server) productSpec(w http.ResponseWriter, r *http.Request) {
 	spec, err := s.store.ProductSpec(r.Context())
 	writeData(w, spec, err)
@@ -189,7 +213,11 @@ func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) appointments(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
-	items, err := s.store.Appointments(r.Context(), auth.TenantID)
+	if !roleCan(auth.Role, domain.PermissionAppointmentManage, domain.PermissionAppointmentRequestOwn) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot view appointments.")
+		return
+	}
+	items, err := s.store.Appointments(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role))
 	writeData(w, map[string]any{"items": items}, err)
 }
 
@@ -243,7 +271,11 @@ func (s *Server) cancelAppointment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
-	payload, err := s.store.Calendar(r.Context(), auth.TenantID)
+	if !roleCan(auth.Role, domain.PermissionAppointmentManage, domain.PermissionAppointmentRequestOwn) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot view the calendar.")
+		return
+	}
+	payload, err := s.store.Calendar(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role))
 	writeData(w, payload, err)
 }
 

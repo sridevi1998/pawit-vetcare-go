@@ -52,6 +52,7 @@ attached to pets where the caller is an active guardian.
 | `GET` | `/product-spec` | Approved v1 product policy: species, statuses, payment provider, telemedicine, labs, cancellation |
 | `GET` | `/role-policies` | Role and permission policy matrix from the spec |
 | `GET` | `/navigation` | Sidebar sections for Docran-style hospital portal layout |
+| `GET` | `/locations` | Active clinic locations for location-scoped workflows |
 | `GET` | `/dashboard/summary` | Top-level operational metrics |
 | `GET` | `/appointments` | Appointment list |
 | `POST` | `/appointments` | Create a staff-managed appointment or pet-parent appointment request |
