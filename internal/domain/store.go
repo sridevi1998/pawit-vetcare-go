@@ -11,11 +11,12 @@ type Store interface {
 	ProductSpec(ctx context.Context) (ProductSpec, error)
 	RolePolicies(ctx context.Context) ([]RolePolicy, error)
 	Navigation(ctx context.Context, tenantID string) ([]NavSection, error)
+	Locations(ctx context.Context, tenantID string) ([]ClinicLocation, error)
 	Summary(ctx context.Context, tenantID string) ([]Metric, error)
-	Appointments(ctx context.Context, tenantID string) ([]Appointment, error)
+	Appointments(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]Appointment, error)
 	CreateAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateAppointmentInput, idempotencyKey string) (AppointmentMutationResult, error)
 	CancelAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole Role, appointmentID string, input CancelAppointmentInput, idempotencyKey string) (AppointmentMutationResult, error)
-	Calendar(ctx context.Context, tenantID string) (map[string]any, error)
+	Calendar(ctx context.Context, tenantID string, actorUserID string, actorRole Role) (map[string]any, error)
 	Queue(ctx context.Context, tenantID string) ([]QueueEntry, error)
 	RegisterWalkIn(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input RegisterWalkInInput, idempotencyKey string) (QueueMutationResult, error)
 	UpdateQueueStatus(ctx context.Context, tenantID string, actorUserID string, actorRole Role, queueID string, status QueueStatus, input UpdateQueueInput, idempotencyKey string) (QueueMutationResult, error)
@@ -134,6 +135,19 @@ func (DemoStore) Navigation(ctx context.Context, tenantID string) ([]NavSection,
 	}, nil
 }
 
+func (DemoStore) Locations(ctx context.Context, tenantID string) ([]ClinicLocation, error) {
+	return []ClinicLocation{
+		{
+			ID:       "loc_demo_main",
+			Name:     "PawIt Demo Clinic",
+			Timezone: "America/Chicago",
+			Phone:    "+13125550100",
+			Email:    "hello@pawit.example",
+			Status:   "active",
+		},
+	}, nil
+}
+
 func (DemoStore) Summary(ctx context.Context, tenantID string) ([]Metric, error) {
 	return []Metric{
 		{Label: "Total Pets", Value: "19", Delta: "+4 this month", Tone: "blue"},
@@ -143,8 +157,8 @@ func (DemoStore) Summary(ctx context.Context, tenantID string) ([]Metric, error)
 	}, nil
 }
 
-func (DemoStore) Appointments(ctx context.Context, tenantID string) ([]Appointment, error) {
-	return []Appointment{
+func (DemoStore) Appointments(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]Appointment, error) {
+	items := []Appointment{
 		{
 			ID: "apt_001", PetName: "Milo", OwnerName: "Avery Parker",
 			PrimaryVeterinarian: "Dr. Asha Rao", AdditionalVeterinarians: []string{"Dr. Vikram Sen"},
@@ -157,7 +171,11 @@ func (DemoStore) Appointments(ctx context.Context, tenantID string) ([]Appointme
 			Time: "11:00", Type: AppointmentTelemedicine, Status: AppointmentRequested,
 			Contact: "+14155550192", MeetingURL: "https://meet.example.com/pawit-demo", Reason: "Follow-up on skin irritation",
 		},
-	}, nil
+	}
+	if actorRole == RolePetParent {
+		return items[:1], nil
+	}
+	return items, nil
 }
 
 func (DemoStore) CreateAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateAppointmentInput, idempotencyKey string) (AppointmentMutationResult, error) {
@@ -189,28 +207,47 @@ func (DemoStore) CreateAppointment(ctx context.Context, tenantID string, actorUs
 func (DemoStore) CancelAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole Role, appointmentID string, input CancelAppointmentInput, idempotencyKey string) (AppointmentMutationResult, error) {
 	return AppointmentMutationResult{
 		Appointment: Appointment{
-			ID:      appointmentID,
-			PetName: "Demo Pet",
-			Status:  AppointmentCancelled,
-			Reason:  input.Reason,
+			ID:                      appointmentID,
+			PetName:                 "Demo Pet",
+			OwnerName:               "Demo Guardian",
+			PrimaryVeterinarian:     "Unassigned",
+			AdditionalVeterinarians: []string{},
+			Time:                    "Unscheduled",
+			Type:                    AppointmentInClinic,
+			Status:                  AppointmentCancelled,
+			Contact:                 "",
+			Reason:                  input.Reason,
 		},
 	}, nil
 }
 
-func (DemoStore) Calendar(ctx context.Context, tenantID string) (map[string]any, error) {
-	appointments, err := DemoStore{}.Appointments(ctx, tenantID)
+func (DemoStore) Calendar(ctx context.Context, tenantID string, actorUserID string, actorRole Role) (map[string]any, error) {
+	appointments, err := DemoStore{}.Appointments(ctx, tenantID, actorUserID, actorRole)
 	if err != nil {
 		return nil, err
 	}
+	counts := map[string]int{
+		"scheduled":  0,
+		"waiting":    0,
+		"inProgress": 0,
+		"done":       0,
+	}
+	for _, appointment := range appointments {
+		switch appointment.Status {
+		case AppointmentScheduled, AppointmentConfirmed, AppointmentRequested:
+			counts["scheduled"]++
+		case AppointmentWaiting:
+			counts["waiting"]++
+		case AppointmentInProgress:
+			counts["inProgress"]++
+		case AppointmentCompleted:
+			counts["done"]++
+		}
+	}
 	return map[string]any{
-		"date": "2026-05-12",
-		"statusCounts": map[string]int{
-			"scheduled":  2,
-			"waiting":    0,
-			"inProgress": 0,
-			"done":       0,
-		},
-		"items": appointments,
+		"date":         "2026-05-12",
+		"statusCounts": counts,
+		"items":        appointments,
 	}, nil
 }
 

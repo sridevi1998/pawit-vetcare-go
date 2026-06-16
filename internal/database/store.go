@@ -127,6 +127,40 @@ func (s PostgresStore) Navigation(ctx context.Context, tenantID string) ([]domai
 	return s.demo.Navigation(ctx, tenantID)
 }
 
+func (s PostgresStore) Locations(ctx context.Context, tenantID string) ([]domain.ClinicLocation, error) {
+	rows, err := s.pool.Query(ctx, `
+		select
+			id::text,
+			name,
+			timezone,
+			coalesce(phone, ''),
+			coalesce(email, ''),
+			status::text
+		from clinic_locations
+		where tenant_id = $1
+			and archived_at is null
+			and status = 'active'
+		order by name
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("read clinic locations: %w", err)
+	}
+	defer rows.Close()
+
+	items := []domain.ClinicLocation{}
+	for rows.Next() {
+		var item domain.ClinicLocation
+		if err := rows.Scan(&item.ID, &item.Name, &item.Timezone, &item.Phone, &item.Email, &item.Status); err != nil {
+			return nil, fmt.Errorf("scan clinic location: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate clinic locations: %w", err)
+	}
+	return items, nil
+}
+
 func (s PostgresStore) Summary(ctx context.Context, tenantID string) ([]domain.Metric, error) {
 	pets, err := s.count(ctx, "select count(*) from pets where tenant_id = $1 and archived_at is null", tenantID)
 	if err != nil {
@@ -154,7 +188,12 @@ func (s PostgresStore) Summary(ctx context.Context, tenantID string) ([]domain.M
 	}, nil
 }
 
-func (s PostgresStore) Appointments(ctx context.Context, tenantID string) ([]domain.Appointment, error) {
+func (s PostgresStore) Appointments(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) ([]domain.Appointment, error) {
+	ownOnly, err := ownAppointmentReadOnly(actorRole)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.pool.Query(ctx, `
 		select
 			a.id::text,
@@ -184,10 +223,22 @@ func (s PostgresStore) Appointments(ctx context.Context, tenantID string) ([]dom
 			join users u on u.id = x.veterinarian_user_id
 			where x.appointment_id = a.id and x.is_primary = false
 		) av on true
-		where a.tenant_id = $1 and a.archived_at is null
+		where a.tenant_id = $1
+			and a.archived_at is null
+			and (
+				$2::boolean = false
+				or exists (
+					select 1
+					from pet_guardians pg
+					where pg.tenant_id = a.tenant_id
+						and pg.pet_id = a.pet_id
+						and pg.user_id = $3
+						and pg.archived_at is null
+				)
+			)
 		order by a.starts_at nulls last, a.created_at desc
 		limit 100
-	`, tenantID)
+	`, tenantID, ownOnly, uuidOrNil(actorUserID))
 	if err != nil {
 		return nil, fmt.Errorf("read appointments: %w", err)
 	}
@@ -420,8 +471,8 @@ func (s PostgresStore) CancelAppointment(ctx context.Context, tenantID string, a
 	return result, nil
 }
 
-func (s PostgresStore) Calendar(ctx context.Context, tenantID string) (map[string]any, error) {
-	items, err := s.Appointments(ctx, tenantID)
+func (s PostgresStore) Calendar(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role) (map[string]any, error) {
+	items, err := s.Appointments(ctx, tenantID, actorUserID, actorRole)
 	if err != nil {
 		return nil, err
 	}
@@ -2901,6 +2952,16 @@ func roleHasAny(role domain.Role, permissions ...domain.Permission) bool {
 		}
 	}
 	return false
+}
+
+func ownAppointmentReadOnly(role domain.Role) (bool, error) {
+	if roleHasAny(role, domain.PermissionAppointmentManage) {
+		return false, nil
+	}
+	if roleHasAny(role, domain.PermissionAppointmentRequestOwn) {
+		return true, nil
+	}
+	return false, domain.ErrForbidden
 }
 
 func sharedPrescriptionReadOnly(role domain.Role) (bool, error) {
