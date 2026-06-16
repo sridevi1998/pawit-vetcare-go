@@ -308,7 +308,7 @@ func documentedAPIRoutes(t *testing.T) []string {
 		t.Fatalf("read API contract docs: %v", err)
 	}
 
-	matches := regexp.MustCompile(`(?m)^\| `+"`"+`(GET|POST)`+"`"+` \| `+"`"+`([^`+"`"+`]+)`+"`"+` \|`).FindAllStringSubmatch(string(content), -1)
+	matches := regexp.MustCompile(`(?m)^\| `+"`"+`(GET|POST|PATCH)`+"`"+` \| `+"`"+`([^`+"`"+`]+)`+"`"+` \|`).FindAllStringSubmatch(string(content), -1)
 	routes := make([]string, 0, len(matches))
 	for _, match := range matches {
 		path := match[2]

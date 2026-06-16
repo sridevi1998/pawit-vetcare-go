@@ -27,6 +27,67 @@ type ClinicLocation struct {
 	Status   string `json:"status"`
 }
 
+type Tenant struct {
+	ID                             string           `json:"id"`
+	Name                           string           `json:"name"`
+	LegalName                      string           `json:"legalName,omitempty"`
+	Status                         string           `json:"status"`
+	StripeCustomerID               string           `json:"stripeCustomerId,omitempty"`
+	DefaultCancellationCutoffHours int              `json:"defaultCancellationCutoffHours,omitempty"`
+	Locations                      []ClinicLocation `json:"locations"`
+	CreatedAt                      string           `json:"createdAt"`
+	UpdatedAt                      string           `json:"updatedAt,omitempty"`
+}
+
+type CreateTenantInput struct {
+	Name                           string                    `json:"name"`
+	LegalName                      string                    `json:"legalName,omitempty"`
+	DefaultCancellationCutoffHours int                       `json:"defaultCancellationCutoffHours,omitempty"`
+	FirstLocation                  CreateClinicLocationInput `json:"firstLocation"`
+	FirstAdmin                     FirstClinicAdminInput     `json:"firstAdmin"`
+}
+
+type UpdateTenantInput struct {
+	Name                           string `json:"name,omitempty"`
+	LegalName                      string `json:"legalName,omitempty"`
+	Status                         string `json:"status,omitempty"`
+	DefaultCancellationCutoffHours *int   `json:"defaultCancellationCutoffHours,omitempty"`
+}
+
+type FirstClinicAdminInput struct {
+	Name              string `json:"name"`
+	Email             string `json:"email"`
+	Phone             string `json:"phone,omitempty"`
+	TemporaryPassword string `json:"temporaryPassword,omitempty"`
+}
+
+type CreateClinicLocationInput struct {
+	Name                    string `json:"name"`
+	Timezone                string `json:"timezone"`
+	Phone                   string `json:"phone,omitempty"`
+	Email                   string `json:"email,omitempty"`
+	CancellationCutoffHours *int   `json:"cancellationCutoffHours,omitempty"`
+}
+
+type UpdateClinicLocationInput struct {
+	Name                    string `json:"name,omitempty"`
+	Timezone                string `json:"timezone,omitempty"`
+	Phone                   string `json:"phone,omitempty"`
+	Email                   string `json:"email,omitempty"`
+	CancellationCutoffHours *int   `json:"cancellationCutoffHours,omitempty"`
+	Status                  string `json:"status,omitempty"`
+}
+
+type TenantMutationResult struct {
+	Tenant     Tenant `json:"tenant"`
+	Idempotent bool   `json:"idempotent,omitempty"`
+}
+
+type ClinicLocationMutationResult struct {
+	Location   ClinicLocation `json:"location"`
+	Idempotent bool           `json:"idempotent,omitempty"`
+}
+
 type Appointment struct {
 	ID                      string            `json:"id"`
 	PetName                 string            `json:"petName"`
@@ -138,6 +199,32 @@ type PetDocument struct {
 	SizeBytes    int64  `json:"sizeBytes"`
 	Status       string `json:"status"`
 	CreatedAt    string `json:"createdAt"`
+}
+
+type PreparePetDocumentUploadInput struct {
+	Title        string `json:"title"`
+	DocumentType string `json:"documentType"`
+	ContentType  string `json:"contentType"`
+	SizeBytes    int64  `json:"sizeBytes"`
+}
+
+type PetDocumentUploadURLResult struct {
+	ObjectPath   string            `json:"objectPath"`
+	UploadURL    string            `json:"uploadUrl"`
+	Method       string            `json:"method"`
+	Headers      map[string]string `json:"headers"`
+	ExpiresAt    string            `json:"expiresAt"`
+	MaxSizeBytes int64             `json:"maxSizeBytes"`
+	Idempotent   bool              `json:"idempotent,omitempty"`
+}
+
+type PetDocumentDownloadURLResult struct {
+	DocumentID  string `json:"documentId"`
+	ObjectPath  string `json:"objectPath"`
+	DownloadURL string `json:"downloadUrl"`
+	Method      string `json:"method"`
+	ExpiresAt   string `json:"expiresAt"`
+	Idempotent  bool   `json:"idempotent,omitempty"`
 }
 
 type UploadPetDocumentInput struct {

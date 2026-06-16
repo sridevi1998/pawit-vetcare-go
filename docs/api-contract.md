@@ -68,7 +68,9 @@ attached to pets where the caller is an active guardian.
 | `POST` | `/pets` | Create a dog/cat pet record with first guardian |
 | `POST` | `/pets/{id}/archive` | Archive a pet record with audit reason |
 | `GET` | `/pets/{id}/documents` | List active document metadata for a pet |
+| `POST` | `/pets/{id}/documents/upload-url` | Issue a short-lived signed upload URL for object storage |
 | `POST` | `/pets/{id}/documents` | Register uploaded pet document metadata |
+| `POST` | `/pets/{id}/documents/{documentId}/download-url` | Issue a short-lived signed download URL for object storage |
 | `POST` | `/pets/{id}/documents/{documentId}/archive` | Archive pet document metadata with an audit reason |
 | `GET` | `/patients` | Pet and pet-parent records |
 | `GET` | `/prescriptions` | Tenant prescription drafts and finalized prescriptions |
@@ -90,6 +92,12 @@ attached to pets where the caller is an active guardian.
 | `GET` | `/doctors` | Veterinarian management |
 | `GET` | `/staff` | Staff management |
 | `POST` | `/staff` | Invite or reactivate a tenant staff member and assign a staff role |
+| `GET` | `/tenants` | SuperAdmin tenant onboarding and governance list |
+| `POST` | `/tenants` | Create a tenant with first clinic location and first ClinicAdmin |
+| `GET` | `/tenants/{id}` | SuperAdmin tenant profile and managed locations |
+| `PATCH` | `/tenants/{id}` | Update tenant profile, launch settings, or lifecycle status |
+| `POST` | `/tenants/{id}/locations` | Create a managed clinic location for a tenant |
+| `PATCH` | `/tenants/{id}/locations/{locationId}` | Update or archive a managed clinic location |
 | `GET` | `/audit-logs` | Tenant audit log review for authorized admins |
 
 ## Contract Maintenance

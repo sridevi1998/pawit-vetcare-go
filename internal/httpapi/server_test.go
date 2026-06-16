@@ -368,6 +368,51 @@ func TestPetDocumentsAllowsReceptionist(t *testing.T) {
 	}
 }
 
+func TestPreparePetDocumentUploadAllowsReceptionist(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"title":"Rabies certificate","documentType":"vaccine_history","contentType":"application/pdf","sizeBytes":1024}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/pets/pet_001/documents/upload-url", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	request.Header.Set("Idempotency-Key", "doc-upload-url-test")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, response.Code, response.Body.String())
+	}
+	var payload domain.PetDocumentUploadURLResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode upload url response: %v", err)
+	}
+	if payload.ObjectPath == "" || payload.UploadURL == "" || payload.Method != "PUT" || payload.Headers["Content-Type"] != "application/pdf" {
+		t.Fatalf("unexpected upload url payload %#v", payload)
+	}
+}
+
+func TestCreatePetDocumentDownloadAllowsReceptionist(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/pets/pet_001/documents/doc_001/download-url", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleReceptionist))
+	request.Header.Set("Idempotency-Key", "doc-download-url-test")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+	var payload domain.PetDocumentDownloadURLResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode download url response: %v", err)
+	}
+	if payload.DocumentID != "doc_001" || payload.DownloadURL == "" || payload.Method != "GET" {
+		t.Fatalf("unexpected download url payload %#v", payload)
+	}
+}
+
 func TestArchivePetDocumentAllowsRecordManager(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/pets/pet_001/documents/doc_001/archive", strings.NewReader(`{"reason":"duplicate upload"}`))
@@ -1022,6 +1067,66 @@ func TestPatientsRejectsRoleWithoutReadPermission(t *testing.T) {
 	}
 }
 
+func TestTenantsAllowSuperAdmin(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleSuperAdmin))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+	var payload struct {
+		Items []domain.Tenant `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode tenant list: %v", err)
+	}
+	if len(payload.Items) == 0 || payload.Items[0].ID == "" || len(payload.Items[0].Locations) == 0 {
+		t.Fatalf("expected tenant list with locations, got %#v", payload)
+	}
+}
+
+func TestTenantsRejectClinicAdmin(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleClinicAdmin))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusForbidden, response.Code, response.Body.String())
+	}
+}
+
+func TestCreateTenantReturnsBootstrappedTenant(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"name":"Northside Vet","firstLocation":{"name":"Northside Main","timezone":"America/Chicago"},"firstAdmin":{"name":"Asha Admin","email":"asha.admin@example.com"}}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/tenants", strings.NewReader(body))
+	request.Header.Set("X-PawIt-Tenant-ID", "tenant_test")
+	request.Header.Set("X-PawIt-Role", string(domain.RoleSuperAdmin))
+	request.Header.Set("Idempotency-Key", "tenant-create-test")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, response.Code, response.Body.String())
+	}
+	var payload domain.TenantMutationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode tenant mutation: %v", err)
+	}
+	if payload.Tenant.Name != "Northside Vet" || len(payload.Tenant.Locations) != 1 || payload.Tenant.Locations[0].Name != "Northside Main" {
+		t.Fatalf("unexpected tenant payload %#v", payload)
+	}
+}
+
 func TestBillingRejectsRoleWithoutReadPermission(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/billing", nil)
@@ -1347,11 +1452,25 @@ func TestMutationEndpointsForwardIdempotencyKey(t *testing.T) {
 			call: "ArchivePet",
 		},
 		{
+			name: "prepare pet document upload",
+			path: "/api/v1/pets/pet_001/documents/upload-url",
+			body: `{"title":"Rabies certificate","documentType":"vaccine_history","contentType":"application/pdf","sizeBytes":1024}`,
+			role: domain.RoleReceptionist,
+			call: "PreparePetDocumentUpload",
+		},
+		{
 			name: "upload pet document",
 			path: "/api/v1/pets/pet_001/documents",
 			body: `{"title":"Rabies certificate","documentType":"vaccine_history","objectPath":"tenant_test/pets/pet_001/rabies.pdf","contentType":"application/pdf","sizeBytes":1024}`,
 			role: domain.RoleReceptionist,
 			call: "UploadPetDocument",
+		},
+		{
+			name: "create pet document download",
+			path: "/api/v1/pets/pet_001/documents/doc_001/download-url",
+			body: `{}`,
+			role: domain.RoleReceptionist,
+			call: "CreatePetDocumentDownload",
 		},
 		{
 			name: "archive pet document",
@@ -1500,9 +1619,19 @@ func (s *idempotencyRecordingStore) ArchivePet(ctx context.Context, tenantID str
 	return s.DemoStore.ArchivePet(ctx, tenantID, actorUserID, actorRole, petID, input, idempotencyKey)
 }
 
+func (s *idempotencyRecordingStore) PreparePetDocumentUpload(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, input domain.PreparePetDocumentUploadInput, idempotencyKey string) (domain.PetDocumentUploadURLResult, error) {
+	s.record("PreparePetDocumentUpload", idempotencyKey)
+	return s.DemoStore.PreparePetDocumentUpload(ctx, tenantID, actorUserID, actorRole, petID, input, idempotencyKey)
+}
+
 func (s *idempotencyRecordingStore) UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, input domain.UploadPetDocumentInput, idempotencyKey string) (domain.PetDocumentMutationResult, error) {
 	s.record("UploadPetDocument", idempotencyKey)
 	return s.DemoStore.UploadPetDocument(ctx, tenantID, actorUserID, actorRole, petID, input, idempotencyKey)
+}
+
+func (s *idempotencyRecordingStore) CreatePetDocumentDownload(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, documentID string, idempotencyKey string) (domain.PetDocumentDownloadURLResult, error) {
+	s.record("CreatePetDocumentDownload", idempotencyKey)
+	return s.DemoStore.CreatePetDocumentDownload(ctx, tenantID, actorUserID, actorRole, petID, documentID, idempotencyKey)
 }
 
 func (s *idempotencyRecordingStore) ArchivePetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole domain.Role, petID string, documentID string, input domain.ArchivePetDocumentInput, idempotencyKey string) (domain.PetDocumentMutationResult, error) {

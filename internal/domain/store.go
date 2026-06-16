@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"strings"
+	"time"
 )
 
 type Store interface {
@@ -12,6 +13,12 @@ type Store interface {
 	RolePolicies(ctx context.Context) ([]RolePolicy, error)
 	Navigation(ctx context.Context, tenantID string) ([]NavSection, error)
 	Locations(ctx context.Context, tenantID string) ([]ClinicLocation, error)
+	Tenants(ctx context.Context) ([]Tenant, error)
+	Tenant(ctx context.Context, tenantID string) (Tenant, error)
+	CreateTenant(ctx context.Context, actorTenantID string, actorUserID string, actorRole Role, input CreateTenantInput, idempotencyKey string) (TenantMutationResult, error)
+	UpdateTenant(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input UpdateTenantInput, idempotencyKey string) (TenantMutationResult, error)
+	CreateTenantLocation(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateClinicLocationInput, idempotencyKey string) (ClinicLocationMutationResult, error)
+	UpdateTenantLocation(ctx context.Context, tenantID string, locationID string, actorUserID string, actorRole Role, input UpdateClinicLocationInput, idempotencyKey string) (ClinicLocationMutationResult, error)
 	Summary(ctx context.Context, tenantID string) ([]Metric, error)
 	Appointments(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]Appointment, error)
 	CreateAppointment(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateAppointmentInput, idempotencyKey string) (AppointmentMutationResult, error)
@@ -24,7 +31,9 @@ type Store interface {
 	CreatePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreatePetInput, idempotencyKey string) (PetMutationResult, error)
 	ArchivePet(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input ArchivePetInput, idempotencyKey string) (PetMutationResult, error)
 	PetDocuments(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string) ([]PetDocument, error)
+	PreparePetDocumentUpload(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input PreparePetDocumentUploadInput, idempotencyKey string) (PetDocumentUploadURLResult, error)
 	UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input UploadPetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error)
+	CreatePetDocumentDownload(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, documentID string, idempotencyKey string) (PetDocumentDownloadURLResult, error)
 	ArchivePetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, documentID string, input ArchivePetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error)
 	Prescriptions(ctx context.Context, tenantID string, actorUserID string, actorRole Role) ([]Prescription, error)
 	PrescriptionTemplates(ctx context.Context, tenantID string) ([]PrescriptionTemplate, error)
@@ -146,6 +155,92 @@ func (DemoStore) Locations(ctx context.Context, tenantID string) ([]ClinicLocati
 			Status:   "active",
 		},
 	}, nil
+}
+
+func (DemoStore) Tenants(ctx context.Context) ([]Tenant, error) {
+	return []Tenant{demoTenant()}, nil
+}
+
+func (DemoStore) Tenant(ctx context.Context, tenantID string) (Tenant, error) {
+	tenant := demoTenant()
+	tenant.ID = tenantID
+	return tenant, nil
+}
+
+func (DemoStore) CreateTenant(ctx context.Context, actorTenantID string, actorUserID string, actorRole Role, input CreateTenantInput, idempotencyKey string) (TenantMutationResult, error) {
+	tenant := demoTenant()
+	tenant.ID = "tenant_demo_created"
+	tenant.Name = input.Name
+	tenant.LegalName = input.LegalName
+	tenant.Locations = []ClinicLocation{{
+		ID:       "loc_demo_created",
+		Name:     input.FirstLocation.Name,
+		Timezone: input.FirstLocation.Timezone,
+		Phone:    input.FirstLocation.Phone,
+		Email:    input.FirstLocation.Email,
+		Status:   "active",
+	}}
+	return TenantMutationResult{Tenant: tenant}, nil
+}
+
+func (DemoStore) UpdateTenant(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input UpdateTenantInput, idempotencyKey string) (TenantMutationResult, error) {
+	tenant := demoTenant()
+	tenant.ID = tenantID
+	if input.Name != "" {
+		tenant.Name = input.Name
+	}
+	if input.LegalName != "" {
+		tenant.LegalName = input.LegalName
+	}
+	if input.Status != "" {
+		tenant.Status = input.Status
+	}
+	return TenantMutationResult{Tenant: tenant}, nil
+}
+
+func (DemoStore) CreateTenantLocation(ctx context.Context, tenantID string, actorUserID string, actorRole Role, input CreateClinicLocationInput, idempotencyKey string) (ClinicLocationMutationResult, error) {
+	return ClinicLocationMutationResult{Location: ClinicLocation{
+		ID:       "loc_demo_created",
+		Name:     input.Name,
+		Timezone: input.Timezone,
+		Phone:    input.Phone,
+		Email:    input.Email,
+		Status:   "active",
+	}}, nil
+}
+
+func (DemoStore) UpdateTenantLocation(ctx context.Context, tenantID string, locationID string, actorUserID string, actorRole Role, input UpdateClinicLocationInput, idempotencyKey string) (ClinicLocationMutationResult, error) {
+	location := ClinicLocation{ID: locationID, Name: "PawIt Demo Clinic", Timezone: "America/Chicago", Status: "active"}
+	if input.Name != "" {
+		location.Name = input.Name
+	}
+	if input.Timezone != "" {
+		location.Timezone = input.Timezone
+	}
+	if input.Status != "" {
+		location.Status = input.Status
+	}
+	location.Phone = input.Phone
+	location.Email = input.Email
+	return ClinicLocationMutationResult{Location: location}, nil
+}
+
+func demoTenant() Tenant {
+	return Tenant{
+		ID:                             "tenant_demo_clinic",
+		Name:                           "PawIt Demo Clinic",
+		Status:                         "active",
+		DefaultCancellationCutoffHours: 24,
+		Locations: []ClinicLocation{{
+			ID:       "loc_demo_main",
+			Name:     "PawIt Demo Clinic",
+			Timezone: "America/Chicago",
+			Phone:    "+13125550100",
+			Email:    "hello@pawit.example",
+			Status:   "active",
+		}},
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}
 }
 
 func (DemoStore) Summary(ctx context.Context, tenantID string) ([]Metric, error) {
@@ -317,6 +412,21 @@ func (DemoStore) PetDocuments(ctx context.Context, tenantID string, actorUserID 
 	}, nil
 }
 
+func (DemoStore) PreparePetDocumentUpload(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input PreparePetDocumentUploadInput, idempotencyKey string) (PetDocumentUploadURLResult, error) {
+	objectPath := "tenants/" + strings.TrimSpace(tenantID) + "/pets/" + strings.TrimSpace(petID) + "/documents/demo-upload"
+	expiresAt := time.Now().UTC().Add(15 * time.Minute)
+	return PetDocumentUploadURLResult{
+		ObjectPath: objectPath,
+		UploadURL:  "https://storage.googleapis.com/pawit-vetcare-documents-dev/" + objectPath + "?X-Goog-Signature=local-dev",
+		Method:     "PUT",
+		Headers: map[string]string{
+			"Content-Type": strings.TrimSpace(input.ContentType),
+		},
+		ExpiresAt:    expiresAt.Format(time.RFC3339),
+		MaxSizeBytes: 25 * 1024 * 1024,
+	}, nil
+}
+
 func (DemoStore) UploadPetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, input UploadPetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error) {
 	return PetDocumentMutationResult{Document: PetDocument{
 		ID:           "doc_demo_created",
@@ -328,6 +438,18 @@ func (DemoStore) UploadPetDocument(ctx context.Context, tenantID string, actorUs
 		SizeBytes:    input.SizeBytes,
 		Status:       "active",
 	}}, nil
+}
+
+func (DemoStore) CreatePetDocumentDownload(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, documentID string, idempotencyKey string) (PetDocumentDownloadURLResult, error) {
+	objectPath := "tenant_demo/pets/doc_001/rabies.pdf"
+	expiresAt := time.Now().UTC().Add(15 * time.Minute)
+	return PetDocumentDownloadURLResult{
+		DocumentID:  documentID,
+		ObjectPath:  objectPath,
+		DownloadURL: "https://storage.googleapis.com/pawit-vetcare-documents-dev/" + objectPath + "?X-Goog-Signature=local-dev",
+		Method:      "GET",
+		ExpiresAt:   expiresAt.Format(time.RFC3339),
+	}, nil
 }
 
 func (DemoStore) ArchivePetDocument(ctx context.Context, tenantID string, actorUserID string, actorRole Role, petID string, documentID string, input ArchivePetDocumentInput, idempotencyKey string) (PetDocumentMutationResult, error) {
