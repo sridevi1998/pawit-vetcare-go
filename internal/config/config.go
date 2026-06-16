@@ -20,6 +20,9 @@ type Config struct {
 	AllowDevAuth      bool
 	RateLimitRPM      int
 	RequestBodyLimit  int64
+	DocumentBucket    string
+	GCSSigningEmail   string
+	GCSPrivateKeyPEM  string
 }
 
 func Load() (Config, error) {
@@ -33,6 +36,9 @@ func Load() (Config, error) {
 		AllowDevAuth:      boolEnv("PAWIT_ALLOW_DEV_AUTH", true),
 		RateLimitRPM:      intEnv("PAWIT_RATE_LIMIT_RPM", 120),
 		RequestBodyLimit:  int64(intEnv("PAWIT_REQUEST_BODY_LIMIT_BYTES", 1<<20)),
+		DocumentBucket:    get("PAWIT_DOCUMENT_BUCKET", "pawit-vetcare-documents-dev"),
+		GCSSigningEmail:   os.Getenv("PAWIT_GCS_SIGNING_EMAIL"),
+		GCSPrivateKeyPEM:  strings.ReplaceAll(os.Getenv("PAWIT_GCS_PRIVATE_KEY_PEM"), `\n`, "\n"),
 	}
 
 	if cfg.Environment == "production" {
@@ -44,6 +50,12 @@ func Load() (Config, error) {
 		}
 		if cfg.DatabaseURL == "" {
 			return Config{}, errors.New("PAWIT_DATABASE_URL is required in production")
+		}
+		if cfg.DocumentBucket == "" || cfg.DocumentBucket == "pawit-vetcare-documents-dev" {
+			return Config{}, errors.New("PAWIT_DOCUMENT_BUCKET is required in production")
+		}
+		if strings.TrimSpace(cfg.GCSSigningEmail) == "" || strings.TrimSpace(cfg.GCSPrivateKeyPEM) == "" {
+			return Config{}, errors.New("PAWIT_GCS_SIGNING_EMAIL and PAWIT_GCS_PRIVATE_KEY_PEM are required in production")
 		}
 	}
 

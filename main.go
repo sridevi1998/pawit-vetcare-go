@@ -34,7 +34,11 @@ func main() {
 			slog.Error("database connection failed", "error", err)
 			os.Exit(1)
 		}
-		store = database.NewPostgresStore(pool)
+		store = database.NewPostgresStore(pool, database.DocumentStorageConfig{
+			Bucket:        cfg.DocumentBucket,
+			SigningEmail:  cfg.GCSSigningEmail,
+			PrivateKeyPEM: cfg.GCSPrivateKeyPEM,
+		})
 		closeStore = pool.Close
 		slog.Info("PawIt database store enabled")
 	}

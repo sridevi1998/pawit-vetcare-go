@@ -11,9 +11,11 @@ Serverless-ready Go backend for PawIt VetCare, a multi-tenant veterinary hospita
 - Appointment request/create and cancellation APIs with role checks, cancellation cutoff enforcement, audit logs, and idempotency-key support
 - Queue management APIs for walk-ins, call/start/complete/cancel transitions, audit logs, and idempotency-key support
 - Pet record mutation APIs for dog/cat intake, audit-safe archival, and pet document metadata uploads with idempotency-key support
+- Pet document signed upload/download URL APIs for direct object storage workflows
 - Lab diagnostics APIs for creating orders, processing status transitions, uploading result metadata, and sharing results with idempotency-key support
 - Billing mutation APIs for creating invoices and voiding invoices with audited ClinicAdmin approval and idempotency-key support
 - Staff management mutation APIs with ClinicAdmin role checks and idempotency-key support
+- SuperAdmin tenant onboarding and clinic location lifecycle APIs with PostgreSQL-backed idempotency and audit logs
 - Tenant audit log review API for authorized admins
 - Dockerfile using a non-root distroless runtime
 - GitHub Actions CI with formatting, tests, vulnerability scan, container build, and Trivy scan
@@ -79,6 +81,7 @@ Required:
 - Database: PostgreSQL 17 on Cloud SQL, private IP only
 - Cache/realtime: Memorystore Redis
 - Storage: Google Cloud Storage signed URLs
+- Required production storage config: `PAWIT_DOCUMENT_BUCKET`, `PAWIT_GCS_SIGNING_EMAIL`, `PAWIT_GCS_PRIVATE_KEY_PEM`
 - AI: Vertex AI Gemini advisory features
 - Email/push: AWS SES and Firebase FCM
 - Payments: Stripe with Apple Pay readiness

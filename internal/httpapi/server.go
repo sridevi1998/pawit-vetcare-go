@@ -56,7 +56,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/pets", s.createPet)
 	s.mux.HandleFunc("POST /api/v1/pets/{id}/archive", s.archivePet)
 	s.mux.HandleFunc("GET /api/v1/pets/{id}/documents", s.petDocuments)
+	s.mux.HandleFunc("POST /api/v1/pets/{id}/documents/upload-url", s.preparePetDocumentUpload)
 	s.mux.HandleFunc("POST /api/v1/pets/{id}/documents", s.uploadPetDocument)
+	s.mux.HandleFunc("POST /api/v1/pets/{id}/documents/{documentId}/download-url", s.createPetDocumentDownload)
 	s.mux.HandleFunc("POST /api/v1/pets/{id}/documents/{documentId}/archive", s.archivePetDocument)
 	s.mux.HandleFunc("GET /api/v1/patients", s.patients)
 	s.mux.HandleFunc("GET /api/v1/prescriptions", s.prescriptions)
@@ -78,6 +80,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/doctors", s.doctors)
 	s.mux.HandleFunc("GET /api/v1/staff", s.staff)
 	s.mux.HandleFunc("POST /api/v1/staff", s.createStaff)
+	s.mux.HandleFunc("GET /api/v1/tenants", s.tenants)
+	s.mux.HandleFunc("POST /api/v1/tenants", s.createTenant)
+	s.mux.HandleFunc("GET /api/v1/tenants/{id}", s.tenant)
+	s.mux.HandleFunc("PATCH /api/v1/tenants/{id}", s.updateTenant)
+	s.mux.HandleFunc("POST /api/v1/tenants/{id}/locations", s.createTenantLocation)
+	s.mux.HandleFunc("PATCH /api/v1/tenants/{id}/locations/{locationId}", s.updateTenantLocation)
 	s.mux.HandleFunc("GET /api/v1/audit-logs", s.auditLogs)
 	s.mux.HandleFunc("/", s.notFound)
 }
@@ -431,6 +439,33 @@ func (s *Server) uploadPetDocument(w http.ResponseWriter, r *http.Request) {
 	writeMutation(w, http.StatusCreated, result, err)
 }
 
+func (s *Server) preparePetDocumentUpload(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionPetDocumentUpload) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot upload pet documents.")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Pet ID is required.")
+		return
+	}
+
+	var input domain.PreparePetDocumentUploadInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validatePreparePetDocumentUpload(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.PreparePetDocumentUpload(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), id, input, idempotencyKey(r))
+	writeMutation(w, http.StatusCreated, result, err)
+}
+
 func (s *Server) petDocuments(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
 	if !roleCan(auth.Role, domain.PermissionPetRecordManage, domain.PermissionPetRecordManageOwn, domain.PermissionPetDocumentUpload) {
@@ -446,6 +481,28 @@ func (s *Server) petDocuments(w http.ResponseWriter, r *http.Request) {
 
 	items, err := s.store.PetDocuments(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), id)
 	writeData(w, map[string]any{"items": items}, err)
+}
+
+func (s *Server) createPetDocumentDownload(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionPetRecordManage, domain.PermissionPetRecordManageOwn, domain.PermissionPetDocumentUpload) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot download pet documents.")
+		return
+	}
+
+	petID := strings.TrimSpace(r.PathValue("id"))
+	if petID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Pet ID is required.")
+		return
+	}
+	documentID := strings.TrimSpace(r.PathValue("documentId"))
+	if documentID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Document ID is required.")
+		return
+	}
+
+	result, err := s.store.CreatePetDocumentDownload(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), petID, documentID, idempotencyKey(r))
+	writeMutation(w, http.StatusOK, result, err)
 }
 
 func (s *Server) archivePetDocument(w http.ResponseWriter, r *http.Request) {
@@ -790,6 +847,112 @@ func (s *Server) createStaff(w http.ResponseWriter, r *http.Request) {
 	writeMutation(w, http.StatusCreated, result, err)
 }
 
+func (s *Server) tenants(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionTenantManage) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot manage tenants.")
+		return
+	}
+
+	items, err := s.store.Tenants(r.Context())
+	writeData(w, map[string]any{"items": items}, err)
+}
+
+func (s *Server) tenant(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionTenantManage) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot manage tenants.")
+		return
+	}
+
+	item, err := s.store.Tenant(r.Context(), r.PathValue("id"))
+	writeMutation(w, http.StatusOK, map[string]any{"tenant": item}, err)
+}
+
+func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionTenantManage) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot manage tenants.")
+		return
+	}
+
+	var input domain.CreateTenantInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateCreateTenant(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.CreateTenant(r.Context(), auth.TenantID, auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
+	writeMutation(w, http.StatusCreated, result, err)
+}
+
+func (s *Server) updateTenant(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionTenantManage) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot manage tenants.")
+		return
+	}
+
+	var input domain.UpdateTenantInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateUpdateTenant(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.UpdateTenant(r.Context(), r.PathValue("id"), auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
+	writeMutation(w, http.StatusOK, result, err)
+}
+
+func (s *Server) createTenantLocation(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionTenantManage) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot manage tenant locations.")
+		return
+	}
+
+	var input domain.CreateClinicLocationInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateCreateClinicLocation(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.CreateTenantLocation(r.Context(), r.PathValue("id"), auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
+	writeMutation(w, http.StatusCreated, result, err)
+}
+
+func (s *Server) updateTenantLocation(w http.ResponseWriter, r *http.Request) {
+	auth := authFromContext(r.Context())
+	if !roleCan(auth.Role, domain.PermissionTenantManage) {
+		writeError(w, http.StatusForbidden, "forbidden", "This role cannot manage tenant locations.")
+		return
+	}
+
+	var input domain.UpdateClinicLocationInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := validateUpdateClinicLocation(input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	result, err := s.store.UpdateTenantLocation(r.Context(), r.PathValue("id"), r.PathValue("locationId"), auth.UserID, domain.Role(auth.Role), input, idempotencyKey(r))
+	writeMutation(w, http.StatusOK, result, err)
+}
+
 func (s *Server) auditLogs(w http.ResponseWriter, r *http.Request) {
 	auth := authFromContext(r.Context())
 	if !roleCan(auth.Role, domain.PermissionAuditLogView) {
@@ -923,6 +1086,22 @@ func validateUploadPetDocument(input domain.UploadPetDocumentInput) error {
 	return nil
 }
 
+func validatePreparePetDocumentUpload(input domain.PreparePetDocumentUploadInput) error {
+	if strings.TrimSpace(input.Title) == "" {
+		return errors.New("title is required")
+	}
+	if strings.TrimSpace(input.DocumentType) == "" {
+		return errors.New("documentType is required")
+	}
+	if strings.TrimSpace(input.ContentType) == "" {
+		return errors.New("contentType is required")
+	}
+	if input.SizeBytes <= 0 {
+		return errors.New("sizeBytes must be greater than 0")
+	}
+	return nil
+}
+
 func validateCreatePrescription(input domain.CreatePrescriptionInput) error {
 	if strings.TrimSpace(input.LocationID) == "" {
 		return errors.New("locationId is required")
@@ -1039,6 +1218,73 @@ func validateCreateStaff(input domain.CreateStaffInput) error {
 	return nil
 }
 
+func validateCreateTenant(input domain.CreateTenantInput) error {
+	if strings.TrimSpace(input.Name) == "" {
+		return errors.New("name is required")
+	}
+	if input.DefaultCancellationCutoffHours < 0 {
+		return errors.New("defaultCancellationCutoffHours must be greater than or equal to 0")
+	}
+	if err := validateCreateClinicLocation(input.FirstLocation); err != nil {
+		return err
+	}
+	if strings.TrimSpace(input.FirstAdmin.Name) == "" {
+		return errors.New("firstAdmin.name is required")
+	}
+	if strings.TrimSpace(input.FirstAdmin.Email) == "" || !strings.Contains(input.FirstAdmin.Email, "@") {
+		return errors.New("firstAdmin.email must be valid")
+	}
+	return nil
+}
+
+func validateUpdateTenant(input domain.UpdateTenantInput) error {
+	if input.Name != "" && strings.TrimSpace(input.Name) == "" {
+		return errors.New("name is required")
+	}
+	if input.Status != "" && !validTenantStatus(input.Status) {
+		return errors.New("status must be active, suspended, or archived")
+	}
+	if input.DefaultCancellationCutoffHours != nil && *input.DefaultCancellationCutoffHours < 0 {
+		return errors.New("defaultCancellationCutoffHours must be greater than or equal to 0")
+	}
+	return nil
+}
+
+func validateCreateClinicLocation(input domain.CreateClinicLocationInput) error {
+	if strings.TrimSpace(input.Name) == "" {
+		return errors.New("name is required")
+	}
+	if strings.TrimSpace(input.Timezone) == "" {
+		return errors.New("timezone is required")
+	}
+	if input.Email != "" && !strings.Contains(input.Email, "@") {
+		return errors.New("email must be valid")
+	}
+	if input.CancellationCutoffHours != nil && *input.CancellationCutoffHours < 0 {
+		return errors.New("cancellationCutoffHours must be greater than or equal to 0")
+	}
+	return nil
+}
+
+func validateUpdateClinicLocation(input domain.UpdateClinicLocationInput) error {
+	if input.Name != "" && strings.TrimSpace(input.Name) == "" {
+		return errors.New("name is required")
+	}
+	if input.Timezone != "" && strings.TrimSpace(input.Timezone) == "" {
+		return errors.New("timezone is required")
+	}
+	if input.Email != "" && !strings.Contains(input.Email, "@") {
+		return errors.New("email must be valid")
+	}
+	if input.CancellationCutoffHours != nil && *input.CancellationCutoffHours < 0 {
+		return errors.New("cancellationCutoffHours must be greater than or equal to 0")
+	}
+	if input.Status != "" && !validTenantStatus(input.Status) {
+		return errors.New("status must be active, suspended, or archived")
+	}
+	return nil
+}
+
 func validAppointmentType(value domain.AppointmentType) bool {
 	for _, item := range domain.PawItProductSpec().SupportedAppointmentTypes {
 		if item == value {
@@ -1069,6 +1315,15 @@ func validLabStatus(value domain.LabOrderStatus) bool {
 func validStaffRole(value domain.Role) bool {
 	switch value {
 	case domain.RoleClinicAdmin, domain.RoleVeterinarian, domain.RoleReceptionist, domain.RoleVetTechnician, domain.RoleLabTechnician:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTenantStatus(value string) bool {
+	switch value {
+	case "active", "suspended", "archived":
 		return true
 	default:
 		return false
