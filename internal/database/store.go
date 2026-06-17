@@ -29,7 +29,7 @@ import (
 
 type PostgresStore struct {
 	pool           *pgxpool.Pool
-	demo           domain.DemoStore
+	demo           *domain.DemoStore
 	documentBucket string
 	signingEmail   string
 	privateKeyPEM  string

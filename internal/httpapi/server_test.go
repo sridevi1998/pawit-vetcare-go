@@ -149,6 +149,26 @@ func TestLoginRejectsUnassignedRole(t *testing.T) {
 	}
 }
 
+func TestLoginAllowsDemoSuperAdmin(t *testing.T) {
+	server := NewServer(testConfig(), domain.NewDemoStore())
+	body := `{"hospitalId":"HOSP-001","email":"superadmin@pawit.example","password":"pawit-demo","role":"SuperAdmin"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+	var session domain.AuthSession
+	if err := json.Unmarshal(response.Body.Bytes(), &session); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if session.Role != domain.RoleSuperAdmin || session.UserID != "user_demo_super_admin" {
+		t.Fatalf("unexpected super admin session %#v", session)
+	}
+}
+
 func TestLogoutClearsSessionCookie(t *testing.T) {
 	server := NewServer(testConfig(), domain.NewDemoStore())
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
@@ -1574,7 +1594,7 @@ func TestMutationEndpointsForwardIdempotencyKey(t *testing.T) {
 }
 
 type idempotencyRecordingStore struct {
-	domain.DemoStore
+	*domain.DemoStore
 	keys map[string]string
 }
 

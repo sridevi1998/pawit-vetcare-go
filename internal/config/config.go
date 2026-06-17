@@ -30,7 +30,7 @@ func Load() (Config, error) {
 		Environment:       get("PAWIT_ENV", "development"),
 		Port:              get("PORT", "8080"),
 		DatabaseURL:       os.Getenv("PAWIT_DATABASE_URL"),
-		AllowedOrigins:    csv(get("PAWIT_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173")),
+		AllowedOrigins:    csv(get("PAWIT_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://localhost:5173")),
 		TrustedProxyCIDRs: csv(os.Getenv("PAWIT_TRUSTED_PROXY_CIDRS")),
 		JWTSigningKey:     os.Getenv("PAWIT_JWT_SIGNING_KEY"),
 		AllowDevAuth:      boolEnv("PAWIT_ALLOW_DEV_AUTH", true),
