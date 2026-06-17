@@ -2,6 +2,17 @@ package config
 
 import "testing"
 
+func TestDefaultAllowedOriginsIncludeNextFallbackPort(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected config to load: %v", err)
+	}
+
+	if !contains(cfg.AllowedOrigins, "http://localhost:3001") {
+		t.Fatalf("expected default allowed origins to include Next fallback port, got %#v", cfg.AllowedOrigins)
+	}
+}
+
 func TestProductionRequiresDatabaseURL(t *testing.T) {
 	t.Setenv("PAWIT_ENV", "production")
 	t.Setenv("PAWIT_ALLOW_DEV_AUTH", "false")
@@ -83,4 +94,13 @@ func TestLoadRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
 	if _, err := Load(); err == nil {
 		t.Fatal("expected invalid trusted proxy config to fail")
 	}
+}
+
+func contains(items []string, expected string) bool {
+	for _, item := range items {
+		if item == expected {
+			return true
+		}
+	}
+	return false
 }
